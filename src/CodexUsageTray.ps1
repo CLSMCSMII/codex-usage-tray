@@ -2,7 +2,7 @@ param([switch]$NoUi, [switch]$Json, [switch]$Details, [switch]$LocalOnly, [strin
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$script:AppVersion = '1.2.1'
+$script:AppVersion = '1.2.2'
 
 function Get-CodexSessionsPath {
     param([string]$Override)
@@ -259,6 +259,38 @@ function Start-UpdateCheck {
     if (-not $script:updateCheckProcess.Start()) { throw 'Could not start the update check.' }
 }
 
+function Show-UpToDateWindow {
+    param([string]$CurrentVersion, [string]$LatestVersion)
+    $form = [System.Windows.Forms.Form]::new()
+    $form.Text = 'Codex Usage Tray is up to date'
+    $form.ClientSize = [System.Drawing.Size]::new(390, 145)
+    $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+    $form.MaximizeBox = $false
+    $form.MinimizeBox = $false
+    $form.ShowInTaskbar = $false
+    $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+    $form.Font = [System.Drawing.Font]::new('Segoe UI', 9)
+    $form.KeyPreview = $true
+
+    $label = [System.Windows.Forms.Label]::new()
+    $label.AutoSize = $false
+    $label.Location = [System.Drawing.Point]::new(18, 17)
+    $label.Size = [System.Drawing.Size]::new(354, 75)
+    $label.Text = "Current version: $CurrentVersion`r`nLatest version: $LatestVersion`r`n`r`nNo update needed. You already have the latest version."
+
+    $okButton = [System.Windows.Forms.Button]::new()
+    $okButton.Text = 'OK'
+    $okButton.Size = [System.Drawing.Size]::new(85, 28)
+    $okButton.Location = [System.Drawing.Point]::new(287, 103)
+    $okButton.DialogResult = [System.Windows.Forms.DialogResult]::OK
+
+    $form.AcceptButton = $okButton
+    $form.CancelButton = $okButton
+    $form.add_KeyDown({ param($sender, $eventArgs) if ($eventArgs.KeyCode -eq [System.Windows.Forms.Keys]::Escape) { $sender.Close() } })
+    $form.Controls.AddRange(@($label, $okButton))
+    try { [void]$form.ShowDialog() } finally { $form.Dispose() }
+}
+
 function Complete-UpdateCheck {
     if (-not $script:updateCheckProcess -or -not $script:updateCheckProcess.HasExited) { return }
     $output = $script:updateCheckProcess.StandardOutput.ReadToEnd()
@@ -278,7 +310,10 @@ function Complete-UpdateCheck {
         [void][System.Windows.Forms.MessageBox]::Show('GitHub returned an invalid update response.', 'Could not check for updates', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         return
     }
-    if (-not $result.updateAvailable) { return }
+    if (-not $result.updateAvailable) {
+        Show-UpToDateWindow -CurrentVersion ([string]$result.currentVersion) -LatestVersion ([string]$result.latestVersion)
+        return
+    }
     $choice = [System.Windows.Forms.MessageBox]::Show(
         "Current version: $($result.currentVersion)`r`nLatest version: $($result.latestVersion)`r`n`r`nDownload and install the update now?",
         'Codex Usage Tray update available',
