@@ -1,74 +1,84 @@
 # Codex Usage Tray for Windows
 
-แอป System Tray แบบเบา ๆ สำหรับ Windows ที่อ่านเปอร์เซ็นต์ usage ล่าสุดจากไฟล์ session ของ Codex ในเครื่องแบบ **read-only** แล้ววาดเปอร์เซ็นต์ลงบนไอคอนข้างนาฬิกา
+A lightweight Windows system tray app that reads the latest usage percentage from local Codex session files in read-only mode and displays it in an icon next to the clock.
 
-รองรับการล็อกอินด้วย ChatGPT Business workspace: ค่าที่แสดงคือ limit ที่ Codex client ส่งให้บัญชี/workspace ของผู้ใช้คนนั้น (มักระบุ `plan_type` เป็น `team`) ไม่ใช่ผลรวมของสมาชิกทุกคนใน workspace
+ChatGPT Business workspaces are supported. The displayed value is the limit reported by the Codex client for the signed-in user and workspace (often identified by `plan_type: team`). It is not the combined usage of every workspace member.
 
-## สิ่งที่แอปทำ
+## Features
 
-- แสดงเปอร์เซ็นต์ที่ใช้แล้วบนไอคอนและ tooltip
-- แสดงช่วงเวลาและเวลา reset เมื่อคลิกขวา
-- รีเฟรชอัตโนมัติทุก 60 วินาที
-- เปลี่ยนสี: เขียว `< 70%`, ส้ม `< 90%`, แดง `>= 90%`
-- ไม่อ่าน `auth.json`, OAuth token, browser cookie หรือ API key
-- ไม่ส่งข้อมูลออกจากเครื่อง
+- Displays the used percentage in the tray icon and tooltip
+- Shows the usage window and reset time in the context menu
+- Refreshes automatically every 60 seconds
+- Uses color-coded status: green below 70%, orange below 90%, and red at 90% or above
+- Does not read `auth.json`, OAuth tokens, browser cookies, or API keys
+- Does not send data outside the computer
 
-> ข้อจำกัด: ChatGPT subscription/Codex quota ไม่มี public API สำหรับผู้ใช้ทั่วไปที่เอกสาร OpenAI รับรอง แอปนี้จึงอ่าน `rate_limits` event ที่ Codex client บันทึกไว้ใน `%USERPROFILE%\.codex\sessions`. รูปแบบไฟล์เป็น implementation detail และอาจเปลี่ยนใน Codex รุ่นถัดไป
+> **Important:** OpenAI does not currently document a public API for retrieving a regular user's remaining ChatGPT subscription or Codex quota percentage. This app therefore reads the `rate_limits` events written by the Codex client under `%USERPROFILE%\.codex\sessions`. This file format is an implementation detail and may change in a future Codex release.
 
-## ติดตั้ง
+## Requirements
 
-ต้องมี Windows 10/11 และ Windows PowerShell 5.1 (มีมากับ Windows)
+- Windows 10 or Windows 11
+- Windows PowerShell 5.1, included with Windows
+- Codex signed in and used at least once on the computer
 
-1. คลิกขวา `Install.ps1` แล้วเลือก **Run with PowerShell** หรือเปิด PowerShell ในโฟลเดอร์นี้แล้วรัน:
+## Installation
+
+1. Right-click `Install.ps1` and select **Run with PowerShell**, or open PowerShell in this folder and run:
 
    ```powershell
    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1
    ```
 
-2. แอปจะถูกคัดลอกไปที่ `%LOCALAPPDATA%\CodexUsageTray` และเปิดทันที
-3. หากไอคอนอยู่ใต้ `^` ให้ลากออกมาวางข้างนาฬิกา
+2. The installer copies the app to `%LOCALAPPDATA%\CodexUsageTray` and starts it immediately.
+3. If the icon is hidden under the `^` menu, drag it next to the clock.
 
-ตัวติดตั้งสร้าง shortcut ใน Startup ของผู้ใช้ปัจจุบัน ไม่ต้องใช้สิทธิ์ Administrator
+The installer creates a shortcut in the current user's Startup folder. Administrator privileges are not required.
 
-ถอนการติดตั้ง:
+To uninstall:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Uninstall.ps1
 ```
 
-## ใช้งานระหว่างพัฒนา
+## Development
+
+Run the app directly:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\CodexUsageTray.ps1
 ```
 
-ทดสอบ parser โดยไม่เปิด UI:
+Run the parser smoke test without opening the UI:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Parser.Tests.ps1
 ```
 
-## โครงสร้าง
+## Project structure
 
 ```text
 CodexUsageTray/
-  src/CodexUsageTray.ps1   แอป tray และ parser
-  tests/Parser.Tests.ps1   smoke tests ด้วยข้อมูลจำลอง
-  Install.ps1              ติดตั้งต่อผู้ใช้ + Startup
-  Uninstall.ps1            ถอนการติดตั้ง
-  LICENSE                  MIT
+  src/CodexUsageTray.ps1   Tray app and usage parser
+  tests/Parser.Tests.ps1   Parser smoke test with fixture data
+  Install.ps1              Per-user installer and Startup setup
+  Uninstall.ps1            Per-user uninstaller
+  LICENSE                  MIT License
 ```
 
-## ความปลอดภัยและช่องทางข้อมูล
+## Data source and security
 
-Provider เริ่มต้นค้นหาเฉพาะไฟล์ `*.jsonl` ล่าสุดใต้ `%CODEX_HOME%\sessions` หรือ `%USERPROFILE%\.codex\sessions` และ parse เฉพาะ object ที่มี `payload.type = token_count` กับ `payload.rate_limits`. เนื้อหา prompt/response ไม่ถูกนำมาเก็บหรือแสดง
+The default provider searches only recent `*.jsonl` files under `%CODEX_HOME%\sessions` or `%USERPROFILE%\.codex\sessions`. It parses only objects containing `payload.type = token_count` and `payload.rate_limits`. Prompt and response content is neither retained nor displayed.
 
-หากต้องการเพิ่ม **OpenAI API usage** ให้ทำเป็น provider แยก เพราะไม่ใช่โควตา ChatGPT/Codex subscription: เรียก Organization Usage/Costs API ด้วย Admin API key และเก็บ key ใน Windows Credential Manager หรือ DPAPI; ห้ามใส่ key ใน source/config/log. API usage ให้จำนวน token/ค่าใช้จ่าย แต่การแปลงเป็น “เปอร์เซ็นต์” ต้องมีงบประมาณที่ผู้ใช้กำหนดเอง
+OpenAI API usage should be implemented as a separate provider because API usage is not the same as a ChatGPT or Codex subscription quota. Such a provider should call the Organization Usage or Costs API with an Admin API key stored in Windows Credential Manager or protected with DPAPI. Never put a key in source code, configuration files, or logs. The API provides token and cost totals; displaying those totals as a percentage requires a user-defined budget.
 
-สำหรับเจ้าของ/แอดมิน ChatGPT Business, Compliance API สามารถใช้ทำ audit กิจกรรม Codex ระดับ workspace ได้ตามสิทธิ์และการตั้งค่าของ workspace แต่ไม่ใช่ API สำหรับอ่านเปอร์เซ็นต์โควตาคงเหลือแบบเดียวกับหน้า Codex Usage ดังนั้นแอปเวอร์ชันนี้ไม่ขอหรือเก็บ admin credential
+For ChatGPT Business owners and administrators, the Compliance API can provide workspace-level Codex audit activity when enabled and permitted by workspace policy. It is not an API for retrieving the same remaining quota percentage shown on the Codex Usage page. This version therefore does not request or store workspace administrator credentials.
 
 ## Troubleshooting
 
-- ขึ้น `No Codex usage data`: เปิด Codex แล้วส่งงานหนึ่งครั้ง จากนั้นกด **Refresh now**
-- path ไม่ตรง: ตั้ง environment variable `CODEX_HOME` ให้ชี้โฟลเดอร์ Codex แล้วเปิดแอปใหม่
-- ไอคอนไม่หายหลังปิดผิดปกติ: เลื่อนเมาส์ผ่านตำแหน่งเดิม Windows จะล้างไอคอนค้าง
+- **No Codex usage data:** Open Codex, run one task, and select **Refresh now**.
+- **Custom Codex location:** Set the `CODEX_HOME` environment variable to the Codex data directory, then restart the app.
+- **Stale icon after an abnormal exit:** Move the pointer over the old icon position and Windows should remove it.
+
+## License
+
+MIT
