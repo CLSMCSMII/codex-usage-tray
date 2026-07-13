@@ -2,7 +2,7 @@ param([switch]$NoUi, [switch]$Json, [switch]$Details, [string]$SessionsPath)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$script:AppVersion = '1.0.0'
+$script:AppVersion = '1.0.1'
 
 function Get-CodexSessionsPath {
     param([string]$Override)
@@ -216,6 +216,8 @@ function New-DetailsWindow {
     $form.StartPosition = 'CenterScreen'
     $form.Font = [System.Drawing.Font]::new('Segoe UI', 9)
     $form.ShowInTaskbar = $false
+    $form.KeyPreview = $true
+    $form.add_KeyDown({ param($sender, $eventArgs) if ($eventArgs.KeyCode -eq [System.Windows.Forms.Keys]::Escape) { $sender.Close() } })
 
     $usageLabel = [System.Windows.Forms.Label]::new(); $usageLabel.Text = 'Usage limits'; $usageLabel.AutoSize = $true; $usageLabel.Location = [System.Drawing.Point]::new(12, 12); $usageLabel.Font = [System.Drawing.Font]::new('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
     $usageList = [System.Windows.Forms.ListView]::new(); $usageList.Location = [System.Drawing.Point]::new(12, 38); $usageList.Size = [System.Drawing.Size]::new(520, 115); $usageList.Anchor = 'Top,Left,Right'; $usageList.View = 'Details'; $usageList.FullRowSelect = $true; $usageList.GridLines = $true

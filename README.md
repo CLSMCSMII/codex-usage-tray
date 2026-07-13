@@ -1,6 +1,6 @@
 # Codex Usage Tray for Windows
 
-Current version: **1.0.0**
+Current version: **1.0.1**
 
 A lightweight Windows system tray app that reads the latest usage percentage from local Codex session files in read-only mode and displays the remaining quota as a battery icon next to the clock.
 
@@ -12,6 +12,7 @@ ChatGPT Business workspaces are supported. The displayed value is the limit repo
 - Opens a left-click details window with every available usage reset and reset-credit expiration date
 - Provides a right-click **Update from GitHub** action that validates, replaces, and restarts the app in place
 - Shows its semantic version in the right-click menu, usage window title, and tooltip
+- Closes the usage and reset-credit window when **Escape** is pressed
 - Shows the usage window and reset time in the context menu
 - Refreshes automatically every 60 seconds
 - Uses color-coded remaining quota: green above 30%, orange at 11-30%, and red at 10% or below
