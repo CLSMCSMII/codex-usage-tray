@@ -11,4 +11,9 @@ try {
     if ([Math]::Abs($result.Windows[0].UsedPercent - 42.5) -gt 0.001) { throw ('Wrong percentage. Result: ' + ($result | ConvertTo-Json -Compress -Depth 6)) }
     if ($result.Windows[0].WindowMinutes -ne 300) { throw 'Wrong window.' }
     Write-Host 'PASS: parser reads the latest Codex rate-limit event.' -ForegroundColor Green
+
+    $json = & $app -NoUi -Json -SessionsPath $temp
+    $jsonResult = $json | ConvertFrom-Json
+    if ([Math]::Abs($jsonResult.Windows[0].UsedPercent - 42.5) -gt 0.001) { throw 'Background JSON output has the wrong percentage.' }
+    Write-Host 'PASS: background refresh returns valid JSON.' -ForegroundColor Green
 } finally { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue }

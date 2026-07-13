@@ -1,4 +1,4 @@
-param([switch]$NoUi, [string]$SessionsPath)
+param([switch]$NoUi, [switch]$Json, [string]$SessionsPath)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -42,23 +42,23 @@ function Get-LatestCodexUsage {
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
     $files = Get-ChildItem -LiteralPath $Path -Recurse -Filter '*.jsonl' -File -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 12
-    $best = $null
     foreach ($file in $files) {
         $lines = @(Get-Content -LiteralPath $file.FullName -Tail 500 -ErrorAction SilentlyContinue)
         for ($i = $lines.Count - 1; $i -ge 0; $i--) {
             if ($lines[$i] -notmatch '"rate_limits"') { continue }
             try {
                 $snapshot = ConvertTo-UsageSnapshot -Event ($lines[$i] | ConvertFrom-Json) -SourceFile $file.FullName
-                if ($snapshot -and (-not $best -or $snapshot.Timestamp -gt $best.Timestamp)) { $best = $snapshot }
-                break
+                if ($snapshot) { return $snapshot }
             } catch { continue }
         }
     }
-    return $best
+    return $null
 }
 
 if ($NoUi) {
-    Get-LatestCodexUsage -Path (Get-CodexSessionsPath $SessionsPath)
+    $snapshot = Get-LatestCodexUsage -Path (Get-CodexSessionsPath $SessionsPath)
+    if ($Json -and $snapshot) { $snapshot | ConvertTo-Json -Compress -Depth 6 }
+    elseif (-not $Json) { $snapshot }
     return
 }
 
@@ -112,15 +112,16 @@ $startupItem.add_Click({
     } else { Remove-Item -LiteralPath $startupShortcut -Force -ErrorAction SilentlyContinue }
 })
 
-function Update-TrayUsage {
+function Set-TrayUsage {
+    param($Snapshot, [string]$ErrorMessage)
     try {
-        $snapshot = Get-LatestCodexUsage -Path (Get-CodexSessionsPath $SessionsPath)
-        if (-not $snapshot) {
+        if ($ErrorMessage) { throw $ErrorMessage }
+        if (-not $Snapshot) {
             $percent = $null; $tip = 'Codex: no usage data'; $statusItem.Text = 'No Codex usage data'
             $windowItem.Text = 'Open Codex and run a task'; $resetItem.Text = ''
         } else {
-            $w = $snapshot.Windows[0]; $percent = [double]$w.UsedPercent
-            $tip = 'Codex used {0:N0}% ({1})' -f $percent, $snapshot.LimitId
+            $w = $Snapshot.Windows[0]; $percent = [double]$w.UsedPercent
+            $tip = 'Codex used {0:N0}% ({1})' -f $percent, $Snapshot.LimitId
             $statusItem.Text = 'Used: {0:N1}%' -f $percent
             $windowItem.Text = if ($w.WindowMinutes) { 'Window: {0}' -f ([TimeSpan]::FromMinutes($w.WindowMinutes).ToString()) } else { 'Window: unknown' }
             $resetItem.Text = if ($w.ResetsAt) { 'Resets: {0:g}' -f $w.ResetsAt } else { 'Reset: unknown' }
@@ -135,11 +136,56 @@ function Update-TrayUsage {
     }
 }
 
-$refreshItem.add_Click({ Update-TrayUsage })
-$script:notify.add_DoubleClick({ Update-TrayUsage; $script:notify.ShowBalloonTip(2500, 'Codex usage', $script:notify.Text, 'Info') })
-$timer = [System.Windows.Forms.Timer]::new(); $timer.Interval = 60000; $timer.add_Tick({ Update-TrayUsage }); $timer.Start()
-$exitItem.add_Click({ $timer.Stop(); $script:notify.Visible = $false; [System.Windows.Forms.Application]::Exit() })
+function Start-UsageRefresh {
+    if ($script:refreshProcess -and -not $script:refreshProcess.HasExited) { return }
+    $statusItem.Text = 'Refreshing...'
+    $refreshItem.Enabled = $false
+    $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -NoUi -Json' -f $PSCommandPath
+    if ($SessionsPath) { $arguments += ' -SessionsPath "{0}"' -f $SessionsPath }
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = 'powershell.exe'
+    $startInfo.Arguments = $arguments
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $script:refreshProcess = [System.Diagnostics.Process]::new()
+    $script:refreshProcess.StartInfo = $startInfo
+    if (-not $script:refreshProcess.Start()) { throw 'Could not start the usage reader.' }
+}
 
-Update-TrayUsage
+function Complete-UsageRefresh {
+    if (-not $script:refreshProcess -or -not $script:refreshProcess.HasExited) { return }
+    $output = $script:refreshProcess.StandardOutput.ReadToEnd()
+    $errorOutput = $script:refreshProcess.StandardError.ReadToEnd()
+    $exitCode = $script:refreshProcess.ExitCode
+    $script:refreshProcess.Dispose()
+    $script:refreshProcess = $null
+    $refreshItem.Enabled = $true
+    $script:nextRefresh = [DateTime]::Now.AddSeconds(60)
+    if ($exitCode -ne 0) {
+        Set-TrayUsage -Snapshot $null -ErrorMessage $(if ($errorOutput) { $errorOutput.Trim() } else { "Usage reader exited with code $exitCode." })
+        return
+    }
+    $snapshot = if ($output.Trim()) { $output | ConvertFrom-Json } else { $null }
+    Set-TrayUsage -Snapshot $snapshot
+}
+
+$script:refreshProcess = $null
+$script:nextRefresh = [DateTime]::MinValue
+$refreshItem.add_Click({ Start-UsageRefresh })
+$script:notify.add_DoubleClick({ Start-UsageRefresh; $script:notify.ShowBalloonTip(2500, 'Codex usage', $script:notify.Text, 'Info') })
+$timer = [System.Windows.Forms.Timer]::new(); $timer.Interval = 250; $timer.add_Tick({
+    Complete-UsageRefresh
+    if (-not $script:refreshProcess -and [DateTime]::Now -ge $script:nextRefresh) { Start-UsageRefresh }
+}); $timer.Start()
+$exitItem.add_Click({
+    $timer.Stop()
+    if ($script:refreshProcess -and -not $script:refreshProcess.HasExited) { $script:refreshProcess.Kill() }
+    $script:notify.Visible = $false
+    [System.Windows.Forms.Application]::Exit()
+})
+
+Start-UsageRefresh
 [System.Windows.Forms.Application]::Run()
 $timer.Dispose(); $menu.Dispose(); $script:notify.Dispose(); if ($script:lastIcon) { $script:lastIcon.Dispose() }
