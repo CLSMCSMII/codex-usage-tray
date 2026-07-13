@@ -47,7 +47,10 @@ function Get-SourceVersion {
 New-Item -ItemType Directory -Path $tempRoot, $extractPath -Force | Out-Null
 try {
     if ($SourceArchive) { Copy-Item -LiteralPath $SourceArchive -Destination $archivePath -Force }
-    else { Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/$Repository/archive/refs/heads/main.zip" -OutFile $archivePath }
+    else {
+        $cacheBust = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/$Repository/archive/refs/heads/main.zip?cacheBust=$cacheBust" -OutFile $archivePath
+    }
     Expand-Archive -LiteralPath $archivePath -DestinationPath $extractPath -Force
     $firstDirectory = Get-ChildItem -LiteralPath $extractPath -Directory | Select-Object -First 1
     $sourceRoot = if ($firstDirectory -and (Test-Path -LiteralPath (Join-Path $firstDirectory.FullName 'src\CodexUsageTray.ps1'))) { $firstDirectory.FullName }

@@ -2,7 +2,7 @@ param([switch]$NoUi, [switch]$Json, [switch]$Details, [switch]$LocalOnly, [strin
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$script:AppVersion = '1.2.0'
+$script:AppVersion = '1.2.1'
 
 function Get-CodexSessionsPath {
     param([string]$Override)
