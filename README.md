@@ -1,6 +1,6 @@
 # Codex Usage Tray for Windows
 
-Current version: **1.0.2**
+Current version: **1.0.3**
 
 A lightweight Windows system tray app that reads the latest usage percentage from local Codex session files in read-only mode and displays the remaining quota as a battery icon next to the clock.
 
