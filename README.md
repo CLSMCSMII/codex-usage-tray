@@ -1,15 +1,15 @@
 # Codex Usage Tray for Windows
 
-A lightweight Windows system tray app that reads the latest usage percentage from local Codex session files in read-only mode and displays it in an icon next to the clock.
+A lightweight Windows system tray app that reads the latest usage percentage from local Codex session files in read-only mode and displays the remaining quota as a battery icon next to the clock.
 
 ChatGPT Business workspaces are supported. The displayed value is the limit reported by the Codex client for the signed-in user and workspace (often identified by `plan_type: team`). It is not the combined usage of every workspace member.
 
 ## Features
 
-- Displays the used percentage in the tray icon and tooltip
+- Displays the remaining percentage as a battery level with a number inside the tray icon
 - Shows the usage window and reset time in the context menu
 - Refreshes automatically every 60 seconds
-- Uses color-coded status: green below 70%, orange below 90%, and red at 90% or above
+- Uses color-coded remaining quota: green above 30%, orange at 11-30%, and red at 10% or below
 - Does not read `auth.json`, OAuth tokens, browser cookies, or API keys
 - Does not send data outside the computer
 

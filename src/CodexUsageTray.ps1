@@ -19,9 +19,11 @@ function ConvertTo-UsageSnapshot {
         $w = $r.$name
         if ($null -ne $w -and $null -ne $w.used_percent) {
             $reset = if ($w.resets_at) { [DateTimeOffset]::FromUnixTimeSeconds([long]$w.resets_at).LocalDateTime } else { $null }
+            $usedPercent = [Math]::Max(0.0, [Math]::Min(100.0, [double]$w.used_percent))
             $windows += [pscustomobject]@{
                 Name = $name
-                UsedPercent = [Math]::Max(0.0, [Math]::Min(100.0, [double]$w.used_percent))
+                UsedPercent = $usedPercent
+                RemainingPercent = 100.0 - $usedPercent
                 WindowMinutes = if ($w.window_minutes) { [int]$w.window_minutes } else { 0 }
                 ResetsAt = $reset
             }
@@ -64,24 +66,53 @@ if ($NoUi) {
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class NativeIconMethods {
+    [DllImport("user32.dll")]
+    public static extern bool DestroyIcon(IntPtr handle);
+}
+'@
 
 function New-UsageIcon {
-    param([Nullable[double]]$Percent)
+    param([Nullable[double]]$RemainingPercent)
     $bmp = [System.Drawing.Bitmap]::new(32, 32)
     $g = [System.Drawing.Graphics]::FromImage($bmp)
     try {
         $g.SmoothingMode = 'AntiAlias'
         $g.Clear([System.Drawing.Color]::Transparent)
-        $value = if ($null -eq $Percent) { 0 } else { [double]$Percent }
-        $color = if ($null -eq $Percent) { [System.Drawing.Color]::SlateGray } elseif ($value -ge 90) { [System.Drawing.Color]::Crimson } elseif ($value -ge 70) { [System.Drawing.Color]::DarkOrange } else { [System.Drawing.Color]::SeaGreen }
-        $g.FillEllipse([System.Drawing.SolidBrush]::new($color), 0, 0, 31, 31)
-        $label = if ($null -eq $Percent) { '?' } elseif ($value -ge 99.5) { '99' } else { [Math]::Round($value).ToString('0') }
-        $fontSize = if ($label.Length -gt 1) { 13 } else { 17 }
+        $value = if ($null -eq $RemainingPercent) { 0.0 } else { [Math]::Max(0.0, [Math]::Min(100.0, [double]$RemainingPercent)) }
+        $levelColor = if ($null -eq $RemainingPercent) { [System.Drawing.Color]::SlateGray } elseif ($value -le 10) { [System.Drawing.Color]::Crimson } elseif ($value -le 30) { [System.Drawing.Color]::DarkOrange } else { [System.Drawing.Color]::SeaGreen }
+
+        $terminalBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::White)
+        $insideBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(210, 35, 35, 35))
+        $levelBrush = [System.Drawing.SolidBrush]::new($levelColor)
+        $outerPen = [System.Drawing.Pen]::new([System.Drawing.Color]::Black, 3)
+        $innerPen = [System.Drawing.Pen]::new([System.Drawing.Color]::White, 1)
+        try {
+            $g.FillRectangle($terminalBrush, 11, 1, 10, 5)
+            $g.DrawRectangle($outerPen, 11, 1, 10, 5)
+            $g.FillRectangle($insideBrush, 6, 7, 20, 21)
+            $fillHeight = [int][Math]::Round(20.0 * $value / 100.0)
+            if ($fillHeight -gt 0) { $g.FillRectangle($levelBrush, 7, 28 - $fillHeight, 18, $fillHeight) }
+            $g.DrawRectangle($outerPen, 4, 5, 24, 24)
+            $g.DrawRectangle($innerPen, 4, 5, 24, 24)
+        } finally {
+            $terminalBrush.Dispose(); $insideBrush.Dispose(); $levelBrush.Dispose(); $outerPen.Dispose(); $innerPen.Dispose()
+        }
+
+        $label = if ($null -eq $RemainingPercent) { '?' } else { [Math]::Round($value).ToString('0') }
+        $fontSize = if ($label.Length -gt 2) { 9 } elseif ($label.Length -gt 1) { 12 } else { 15 }
         $font = [System.Drawing.Font]::new('Segoe UI', $fontSize, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
         $format = [System.Drawing.StringFormat]::new(); $format.Alignment = 'Center'; $format.LineAlignment = 'Center'
-        $g.DrawString($label, $font, [System.Drawing.Brushes]::White, [System.Drawing.RectangleF]::new(0, 0, 32, 31), $format)
+        $textRect = [System.Drawing.RectangleF]::new(4, 5, 24, 25)
+        $g.DrawString($label, $font, [System.Drawing.Brushes]::Black, [System.Drawing.RectangleF]::new(5, 6, 24, 25), $format)
+        $g.DrawString($label, $font, [System.Drawing.Brushes]::White, $textRect, $format)
         $font.Dispose(); $format.Dispose()
-        return [System.Drawing.Icon]::FromHandle($bmp.GetHicon()).Clone()
+        $handle = $bmp.GetHicon()
+        try { return [System.Drawing.Icon]::FromHandle($handle).Clone() }
+        finally { [void][NativeIconMethods]::DestroyIcon($handle) }
     } finally { $g.Dispose(); $bmp.Dispose() }
 }
 
@@ -120,9 +151,9 @@ function Set-TrayUsage {
             $percent = $null; $tip = 'Codex: no usage data'; $statusItem.Text = 'No Codex usage data'
             $windowItem.Text = 'Open Codex and run a task'; $resetItem.Text = ''
         } else {
-            $w = $Snapshot.Windows[0]; $percent = [double]$w.UsedPercent
-            $tip = 'Codex used {0:N0}% ({1})' -f $percent, $Snapshot.LimitId
-            $statusItem.Text = 'Used: {0:N1}%' -f $percent
+            $w = $Snapshot.Windows[0]; $percent = [double]$w.RemainingPercent
+            $tip = 'Codex remaining {0:N0}% ({1})' -f $percent, $Snapshot.LimitId
+            $statusItem.Text = 'Remaining: {0:N1}%' -f $percent
             $windowItem.Text = if ($w.WindowMinutes) { 'Window: {0}' -f ([TimeSpan]::FromMinutes($w.WindowMinutes).ToString()) } else { 'Window: unknown' }
             $resetItem.Text = if ($w.ResetsAt) { 'Resets: {0:g}' -f $w.ResetsAt } else { 'Reset: unknown' }
         }
