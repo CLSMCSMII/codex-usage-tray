@@ -2,6 +2,7 @@ param([switch]$NoUi, [switch]$Json, [switch]$Details, [string]$SessionsPath)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$script:AppVersion = '1.0.0'
 
 function Get-CodexSessionsPath {
     param([string]$Override)
@@ -160,6 +161,8 @@ $refreshItem = $menu.Items.Add('Refresh now')
 $updateItem = $menu.Items.Add('Update from GitHub')
 $startupItem = $menu.Items.Add('Open at sign-in')
 $startupItem.CheckOnClick = $true
+$versionItem = $menu.Items.Add("Version $script:AppVersion")
+$versionItem.Enabled = $false
 $exitItem = $menu.Items.Add('Exit')
 $script:notify.ContextMenuStrip = $menu
 $script:updateResultPath = Join-Path (Split-Path (Split-Path $PSCommandPath)) 'update-result.json'
@@ -207,7 +210,7 @@ function Format-WindowDuration {
 
 function New-DetailsWindow {
     $form = [System.Windows.Forms.Form]::new()
-    $form.Text = 'Codex usage and reset credits'
+    $form.Text = "Codex Usage Tray v$script:AppVersion - usage and reset credits"
     $form.Size = [System.Drawing.Size]::new(560, 430)
     $form.MinimumSize = [System.Drawing.Size]::new(520, 360)
     $form.StartPosition = 'CenterScreen'
@@ -278,7 +281,7 @@ function Set-TrayUsage {
         } else {
             $script:lastSnapshot = $Snapshot
             $w = $Snapshot.Windows[0]; $percent = [double]$w.RemainingPercent
-            $tip = 'Codex remaining {0:N0}% ({1})' -f $percent, $Snapshot.LimitId
+            $tip = 'Codex v{0} remaining {1:N0}% ({2})' -f $script:AppVersion, $percent, $Snapshot.LimitId
             $statusItem.Text = 'Remaining: {0:N1}%' -f $percent
             $windowItem.Text = if ($w.WindowMinutes) { 'Window: {0}' -f ([TimeSpan]::FromMinutes($w.WindowMinutes).ToString()) } else { 'Window: unknown' }
             $resetItem.Text = if ($w.ResetsAt) { 'Resets: {0:g}' -f $w.ResetsAt } else { 'Reset: unknown' }
