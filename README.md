@@ -1,6 +1,6 @@
 # Codex Usage Tray for Windows
 
-Current version: **1.0.3**
+Current version: **1.1.0**
 
 A lightweight Windows system tray app that reads the latest usage percentage from local Codex session files in read-only mode and displays the remaining quota as a battery icon next to the clock.
 
@@ -16,7 +16,7 @@ ChatGPT Business workspaces are supported. The displayed value is the limit repo
 - Shows the usage window and reset time in the context menu
 - Refreshes automatically every 60 seconds
 - Uses color-coded remaining quota: green above 30%, orange at 11-30%, and red at 10% or below
-- Reads the Codex OAuth access token only after a left-click details request; it is never displayed, logged, or stored by this app
+- Reads the Codex OAuth access token for live usage refreshes and left-click reset-credit requests; it is never displayed, logged, or stored by this app
 - Does not send data outside the computer
 
 > **Important:** OpenAI does not currently document a public API for retrieving a regular user's remaining ChatGPT subscription or Codex quota percentage. This app therefore reads the `rate_limits` events written by the Codex client under `%USERPROFILE%\.codex\sessions`. This file format is an implementation detail and may change in a future Codex release.
@@ -75,9 +75,9 @@ CodexUsageTray/
 
 ## Data source and security
 
-The default provider searches only recent `*.jsonl` files under `%CODEX_HOME%\sessions` or `%USERPROFILE%\.codex\sessions`. It parses only objects containing `payload.type = token_count` and `payload.rate_limits`. Prompt and response content is neither retained nor displayed.
+The primary provider requests current usage from `https://chatgpt.com/backend-api/wham/usage` over HTTPS using the existing Codex access token. If live usage is unavailable, the fallback provider searches recent `*.jsonl` files under `%CODEX_HOME%\sessions` or `%USERPROFILE%\.codex\sessions` and parses only objects containing `payload.type = token_count` and `payload.rate_limits`. Prompt and response content is neither retained nor displayed.
 
-When the user left-clicks the tray icon, the app reads the existing Codex access token from `%CODEX_HOME%\auth.json` or `%USERPROFILE%\.codex\auth.json` and sends it only to `https://chatgpt.com/backend-api/wham/rate-limit-reset-credits` over HTTPS. The token and response are kept in memory only. This ChatGPT backend endpoint is not a documented public API and may change or stop working without notice.
+The app reads the existing Codex access token from `%CODEX_HOME%\auth.json` or `%USERPROFILE%\.codex\auth.json` and sends it only to the ChatGPT usage and reset-credit endpoints over HTTPS. The token and responses are kept in memory only. These ChatGPT backend endpoints are not documented public APIs and may change or stop working without notice.
 
 ## Updating from GitHub
 

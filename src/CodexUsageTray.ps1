@@ -1,8 +1,8 @@
-param([switch]$NoUi, [switch]$Json, [switch]$Details, [string]$SessionsPath)
+param([switch]$NoUi, [switch]$Json, [switch]$Details, [switch]$LocalOnly, [string]$SessionsPath)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$script:AppVersion = '1.0.3'
+$script:AppVersion = '1.1.0'
 
 function Get-CodexSessionsPath {
     param([string]$Override)
@@ -37,6 +37,7 @@ function ConvertTo-UsageSnapshot {
         PlanType = [string]$r.plan_type
         Windows = $windows
         SourceFile = $SourceFile
+        DataSource = 'local'
     }
 }
 
@@ -58,13 +59,52 @@ function Get-LatestCodexUsage {
     return $null
 }
 
-function Get-AvailableResetCredits {
+function Get-CodexAccessToken {
     $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME '.codex' }
     $authPath = Join-Path $codexHome 'auth.json'
-    if (-not (Test-Path -LiteralPath $authPath)) { throw 'Codex auth.json was not found. Sign in to Codex and try again.' }
+    if (-not (Test-Path -LiteralPath $authPath)) { throw 'Codex auth.json was not found. Sign in to ChatGPT/Codex and try again.' }
     $auth = Get-Content -Raw -LiteralPath $authPath | ConvertFrom-Json
     $accessToken = $auth.tokens.access_token
-    if (-not $accessToken) { throw 'No Codex access token was found. Sign in to Codex and try again.' }
+    if (-not $accessToken) { throw 'No Codex access token was found. Sign in to ChatGPT/Codex and try again.' }
+    return $accessToken
+}
+
+function Get-LiveCodexUsage {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $accessToken = Get-CodexAccessToken
+    $response = Invoke-RestMethod -Uri 'https://chatgpt.com/backend-api/wham/usage?supports_rewardless_invites=true' -Headers @{
+        Authorization = "Bearer $accessToken"
+        originator = 'Codex Desktop'
+        'OAI-Product-Sku' = 'CODEX'
+        Accept = 'application/json'
+    }
+    if (-not $response.rate_limit) { throw 'The live usage response did not contain rate_limit data.' }
+    $windows = @()
+    foreach ($name in @('primary', 'secondary')) {
+        $propertyName = $name + '_window'; $window = $response.rate_limit.$propertyName
+        if ($null -eq $window -or $null -eq $window.used_percent) { continue }
+        $usedPercent = [Math]::Max(0.0, [Math]::Min(100.0, [double]$window.used_percent))
+        $windows += [pscustomobject]@{
+            Name = $name
+            UsedPercent = $usedPercent
+            RemainingPercent = 100.0 - $usedPercent
+            WindowMinutes = if ($window.limit_window_seconds) { [int][Math]::Round([double]$window.limit_window_seconds / 60.0) } else { 0 }
+            ResetsAt = if ($window.reset_at) { [DateTimeOffset]::FromUnixTimeSeconds([long]$window.reset_at).LocalDateTime } else { $null }
+        }
+    }
+    if ($windows.Count -eq 0) { throw 'The live usage response did not contain a usage window.' }
+    [pscustomobject]@{
+        Timestamp = [DateTime]::Now
+        LimitId = 'codex'
+        PlanType = [string]$response.plan_type
+        Windows = $windows
+        SourceFile = $null
+        DataSource = 'live'
+    }
+}
+
+function Get-AvailableResetCredits {
+    $accessToken = Get-CodexAccessToken
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $response = Invoke-RestMethod -Uri 'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits' -Headers @{
         Authorization = "Bearer $accessToken"
@@ -83,12 +123,17 @@ function Get-AvailableResetCredits {
 }
 
 if ($NoUi) {
-    $snapshot = Get-LatestCodexUsage -Path (Get-CodexSessionsPath $SessionsPath)
+    $usageError = $null
+    if ($LocalOnly) { $snapshot = Get-LatestCodexUsage -Path (Get-CodexSessionsPath $SessionsPath) }
+    else {
+        try { $snapshot = Get-LiveCodexUsage }
+        catch { $usageError = $_.Exception.Message; $snapshot = Get-LatestCodexUsage -Path (Get-CodexSessionsPath $SessionsPath) }
+    }
     if ($Details) {
         try {
-            $result = [pscustomobject]@{ Snapshot = $snapshot; Credits = @(Get-AvailableResetCredits); Error = $null; FetchedAt = [DateTime]::Now.ToString('o') }
+            $result = [pscustomobject]@{ Snapshot = $snapshot; Credits = @(Get-AvailableResetCredits); Error = $null; UsageError = $usageError; FetchedAt = [DateTime]::Now.ToString('o') }
         } catch {
-            $result = [pscustomobject]@{ Snapshot = $snapshot; Credits = @(); Error = $_.Exception.Message; FetchedAt = [DateTime]::Now.ToString('o') }
+            $result = [pscustomobject]@{ Snapshot = $snapshot; Credits = @(); Error = $_.Exception.Message; UsageError = $usageError; FetchedAt = [DateTime]::Now.ToString('o') }
         }
         if ($Json) { $result | ConvertTo-Json -Compress -Depth 8 } else { $result }
     }
@@ -254,7 +299,16 @@ function Update-DetailsWindow {
         [void]$item.SubItems.Add($expiry.ToString('f')); [void]$item.SubItems.Add($remainingText); [void]$controls.CreditsList.Items.Add($item)
     }
     if (@($Data.Credits).Count -eq 0) { [void]$controls.CreditsList.Items.Add([System.Windows.Forms.ListViewItem]::new('No available credits')) }
-    $controls.Status.Text = if ($Data.Error) { 'Credits unavailable: ' + [string]$Data.Error } else { 'Updated ' + ([DateTime]::Parse([string]$Data.FetchedAt)).ToString('T') }
+    $checkedAt = ([DateTime]::Parse([string]$Data.FetchedAt)).ToString('T')
+    if ($Data.Snapshot -and [string]$Data.Snapshot.DataSource -eq 'live') {
+        $sourceText = "Live usage and credits checked $checkedAt"
+    } elseif ($Data.Snapshot) {
+        $snapshotAt = ([DateTime]::Parse([string]$Data.Snapshot.Timestamp)).ToString('g')
+        $sourceText = "Local usage snapshot $snapshotAt; credits checked $checkedAt"
+    } else { $sourceText = "No usage snapshot; credits checked $checkedAt" }
+    if ($Data.Error) { $sourceText += '; credits unavailable: ' + [string]$Data.Error }
+    elseif ($Data.UsageError) { $sourceText += '; live usage unavailable' }
+    $controls.Status.Text = $sourceText
 }
 
 $startupShortcut = Join-Path ([Environment]::GetFolderPath('Startup')) 'Codex Usage Tray.lnk'

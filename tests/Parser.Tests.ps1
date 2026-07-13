@@ -5,15 +5,16 @@ New-Item -ItemType Directory -Path $temp | Out-Null
 try {
     $line = '{"timestamp":"2026-07-13T00:00:00Z","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","plan_type":"test","primary":{"used_percent":42.5,"window_minutes":300,"resets_at":1783904400},"secondary":null}}}'
     [IO.File]::WriteAllText((Join-Path $temp 'fixture.jsonl'), $line)
-    $result = & $app -NoUi -SessionsPath $temp
+    $result = & $app -NoUi -LocalOnly -SessionsPath $temp
     if (-not $result) { throw 'Expected a usage snapshot.' }
     if ($result.LimitId -ne 'codex') { throw 'Wrong limit id.' }
+    if ($result.DataSource -ne 'local') { throw 'Fixture should be identified as local data.' }
     if ([Math]::Abs($result.Windows[0].UsedPercent - 42.5) -gt 0.001) { throw ('Wrong percentage. Result: ' + ($result | ConvertTo-Json -Compress -Depth 6)) }
     if ([Math]::Abs($result.Windows[0].RemainingPercent - 57.5) -gt 0.001) { throw 'Wrong remaining percentage.' }
     if ($result.Windows[0].WindowMinutes -ne 300) { throw 'Wrong window.' }
     Write-Host 'PASS: parser reads the latest Codex rate-limit event.' -ForegroundColor Green
 
-    $json = & $app -NoUi -Json -SessionsPath $temp
+    $json = & $app -NoUi -Json -LocalOnly -SessionsPath $temp
     $jsonResult = $json | ConvertFrom-Json
     if ([Math]::Abs($jsonResult.Windows[0].UsedPercent - 42.5) -gt 0.001) { throw 'Background JSON output has the wrong percentage.' }
     if ([Math]::Abs($jsonResult.Windows[0].RemainingPercent - 57.5) -gt 0.001) { throw 'Background JSON output has the wrong remaining percentage.' }
