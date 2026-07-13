@@ -1,4 +1,4 @@
-param([switch]$NoUi, [switch]$Json, [string]$SessionsPath)
+param([switch]$NoUi, [switch]$Json, [switch]$Details, [string]$SessionsPath)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -57,9 +57,41 @@ function Get-LatestCodexUsage {
     return $null
 }
 
+function Get-AvailableResetCredits {
+    $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME '.codex' }
+    $authPath = Join-Path $codexHome 'auth.json'
+    if (-not (Test-Path -LiteralPath $authPath)) { throw 'Codex auth.json was not found. Sign in to Codex and try again.' }
+    $auth = Get-Content -Raw -LiteralPath $authPath | ConvertFrom-Json
+    $accessToken = $auth.tokens.access_token
+    if (-not $accessToken) { throw 'No Codex access token was found. Sign in to Codex and try again.' }
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $response = Invoke-RestMethod -Uri 'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits' -Headers @{
+        Authorization = "Bearer $accessToken"
+        originator = 'Codex Desktop'
+        'OAI-Product-Sku' = 'CODEX'
+        Accept = 'application/json'
+    }
+    @($response.credits | Where-Object { $_.status -eq 'available' } | ForEach-Object {
+        $expiry = [DateTimeOffset]::Parse([string]$_.expires_at)
+        [pscustomobject]@{
+            Status = [string]$_.status
+            ExpiresAtUtc = $expiry.UtcDateTime.ToString('o')
+            ExpiresAtLocal = $expiry.LocalDateTime.ToString('o')
+        }
+    })
+}
+
 if ($NoUi) {
     $snapshot = Get-LatestCodexUsage -Path (Get-CodexSessionsPath $SessionsPath)
-    if ($Json -and $snapshot) { $snapshot | ConvertTo-Json -Compress -Depth 6 }
+    if ($Details) {
+        try {
+            $result = [pscustomobject]@{ Snapshot = $snapshot; Credits = @(Get-AvailableResetCredits); Error = $null; FetchedAt = [DateTime]::Now.ToString('o') }
+        } catch {
+            $result = [pscustomobject]@{ Snapshot = $snapshot; Credits = @(); Error = $_.Exception.Message; FetchedAt = [DateTime]::Now.ToString('o') }
+        }
+        if ($Json) { $result | ConvertTo-Json -Compress -Depth 8 } else { $result }
+    }
+    elseif ($Json -and $snapshot) { $snapshot | ConvertTo-Json -Compress -Depth 6 }
     elseif (-not $Json) { $snapshot }
     return
 }
@@ -130,6 +162,64 @@ $startupItem.CheckOnClick = $true
 $exitItem = $menu.Items.Add('Exit')
 $script:notify.ContextMenuStrip = $menu
 
+function Format-WindowDuration {
+    param([int]$Minutes)
+    if ($Minutes -le 0) { return 'Unknown' }
+    if ($Minutes % 1440 -eq 0) { return ('{0} days' -f ($Minutes / 1440)) }
+    if ($Minutes % 60 -eq 0) { return ('{0} hours' -f ($Minutes / 60)) }
+    return ('{0} minutes' -f $Minutes)
+}
+
+function New-DetailsWindow {
+    $form = [System.Windows.Forms.Form]::new()
+    $form.Text = 'Codex usage and reset credits'
+    $form.Size = [System.Drawing.Size]::new(560, 430)
+    $form.MinimumSize = [System.Drawing.Size]::new(520, 360)
+    $form.StartPosition = 'CenterScreen'
+    $form.Font = [System.Drawing.Font]::new('Segoe UI', 9)
+    $form.ShowInTaskbar = $false
+
+    $usageLabel = [System.Windows.Forms.Label]::new(); $usageLabel.Text = 'Usage limits'; $usageLabel.AutoSize = $true; $usageLabel.Location = [System.Drawing.Point]::new(12, 12); $usageLabel.Font = [System.Drawing.Font]::new('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
+    $usageList = [System.Windows.Forms.ListView]::new(); $usageList.Location = [System.Drawing.Point]::new(12, 38); $usageList.Size = [System.Drawing.Size]::new(520, 115); $usageList.Anchor = 'Top,Left,Right'; $usageList.View = 'Details'; $usageList.FullRowSelect = $true; $usageList.GridLines = $true
+    [void]$usageList.Columns.Add('Limit', 95); [void]$usageList.Columns.Add('Remaining', 90); [void]$usageList.Columns.Add('Window', 90); [void]$usageList.Columns.Add('Resets (local time)', 220)
+
+    $creditsLabel = [System.Windows.Forms.Label]::new(); $creditsLabel.Text = 'Available reset credits'; $creditsLabel.AutoSize = $true; $creditsLabel.Location = [System.Drawing.Point]::new(12, 169); $creditsLabel.Font = [System.Drawing.Font]::new('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
+    $creditsList = [System.Windows.Forms.ListView]::new(); $creditsList.Location = [System.Drawing.Point]::new(12, 195); $creditsList.Size = [System.Drawing.Size]::new(520, 145); $creditsList.Anchor = 'Top,Bottom,Left,Right'; $creditsList.View = 'Details'; $creditsList.FullRowSelect = $true; $creditsList.GridLines = $true
+    [void]$creditsList.Columns.Add('Status', 90); [void]$creditsList.Columns.Add('Expires (local time)', 230); [void]$creditsList.Columns.Add('Time remaining', 160)
+
+    $detailsStatus = [System.Windows.Forms.Label]::new(); $detailsStatus.Text = 'Loading...'; $detailsStatus.AutoEllipsis = $true; $detailsStatus.Location = [System.Drawing.Point]::new(12, 354); $detailsStatus.Size = [System.Drawing.Size]::new(520, 28); $detailsStatus.Anchor = 'Bottom,Left,Right'
+    $form.Controls.AddRange(@($usageLabel, $usageList, $creditsLabel, $creditsList, $detailsStatus))
+    $form.Tag = [pscustomobject]@{ UsageList = $usageList; CreditsList = $creditsList; Status = $detailsStatus }
+    return $form
+}
+
+function Update-DetailsWindow {
+    param($Data)
+    if (-not $script:detailsForm -or $script:detailsForm.IsDisposed) { return }
+    $controls = $script:detailsForm.Tag
+    $controls.UsageList.Items.Clear(); $controls.CreditsList.Items.Clear()
+    if ($Data.Snapshot) {
+        foreach ($w in @($Data.Snapshot.Windows)) {
+            $resetText = if ($w.ResetsAt) { ([DateTime]::Parse([string]$w.ResetsAt)).ToString('f') } else { 'Unknown' }
+            $item = [System.Windows.Forms.ListViewItem]::new(([string]$w.Name))
+            [void]$item.SubItems.Add(('{0:N1}%' -f [double]$w.RemainingPercent))
+            [void]$item.SubItems.Add((Format-WindowDuration ([int]$w.WindowMinutes)))
+            [void]$item.SubItems.Add($resetText); [void]$controls.UsageList.Items.Add($item)
+        }
+    } else {
+        [void]$controls.UsageList.Items.Add([System.Windows.Forms.ListViewItem]::new('No local usage data'))
+    }
+    foreach ($credit in @($Data.Credits)) {
+        $expiry = [DateTime]::Parse([string]$credit.ExpiresAtLocal)
+        $remaining = $expiry - [DateTime]::Now
+        $remainingText = if ($remaining.TotalSeconds -le 0) { 'Expired' } elseif ($remaining.TotalDays -ge 1) { '{0}d {1}h' -f [Math]::Floor($remaining.TotalDays), $remaining.Hours } else { '{0}h {1}m' -f [Math]::Floor($remaining.TotalHours), $remaining.Minutes }
+        $item = [System.Windows.Forms.ListViewItem]::new(([string]$credit.Status))
+        [void]$item.SubItems.Add($expiry.ToString('f')); [void]$item.SubItems.Add($remainingText); [void]$controls.CreditsList.Items.Add($item)
+    }
+    if (@($Data.Credits).Count -eq 0) { [void]$controls.CreditsList.Items.Add([System.Windows.Forms.ListViewItem]::new('No available credits')) }
+    $controls.Status.Text = if ($Data.Error) { 'Credits unavailable: ' + [string]$Data.Error } else { 'Updated ' + ([DateTime]::Parse([string]$Data.FetchedAt)).ToString('T') }
+}
+
 $startupShortcut = Join-Path ([Environment]::GetFolderPath('Startup')) 'Codex Usage Tray.lnk'
 $startupItem.Checked = [bool](Test-Path -LiteralPath $startupShortcut)
 $startupItem.add_Click({
@@ -151,6 +241,7 @@ function Set-TrayUsage {
             $percent = $null; $tip = 'Codex: no usage data'; $statusItem.Text = 'No Codex usage data'
             $windowItem.Text = 'Open Codex and run a task'; $resetItem.Text = ''
         } else {
+            $script:lastSnapshot = $Snapshot
             $w = $Snapshot.Windows[0]; $percent = [double]$w.RemainingPercent
             $tip = 'Codex remaining {0:N0}% ({1})' -f $percent, $Snapshot.LimitId
             $statusItem.Text = 'Remaining: {0:N1}%' -f $percent
@@ -165,6 +256,31 @@ function Set-TrayUsage {
     } catch {
         $statusItem.Text = 'Could not read Codex usage'; $windowItem.Text = $_.Exception.Message; $resetItem.Text = ''
     }
+}
+
+function Start-DetailsRefresh {
+    if (-not $script:detailsForm -or $script:detailsForm.IsDisposed) {
+        $script:detailsForm = New-DetailsWindow
+        $script:detailsForm.add_FormClosed({ $script:detailsForm = $null })
+    }
+    $script:detailsForm.Show(); $script:detailsForm.Activate()
+    $script:detailsForm.Tag.Status.Text = 'Loading reset credits...'
+    if ($script:detailsProcess -and -not $script:detailsProcess.HasExited) { return }
+    $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -NoUi -Json -Details' -f $PSCommandPath
+    if ($SessionsPath) { $arguments += ' -SessionsPath "{0}"' -f $SessionsPath }
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new(); $startInfo.FileName = 'powershell.exe'; $startInfo.Arguments = $arguments
+    $startInfo.UseShellExecute = $false; $startInfo.CreateNoWindow = $true; $startInfo.RedirectStandardOutput = $true; $startInfo.RedirectStandardError = $true
+    $script:detailsProcess = [System.Diagnostics.Process]::new(); $script:detailsProcess.StartInfo = $startInfo
+    if (-not $script:detailsProcess.Start()) { $script:detailsForm.Tag.Status.Text = 'Could not start the details reader.' }
+}
+
+function Complete-DetailsRefresh {
+    if (-not $script:detailsProcess -or -not $script:detailsProcess.HasExited) { return }
+    $output = $script:detailsProcess.StandardOutput.ReadToEnd(); $errorOutput = $script:detailsProcess.StandardError.ReadToEnd(); $exitCode = $script:detailsProcess.ExitCode
+    $script:detailsProcess.Dispose(); $script:detailsProcess = $null
+    if (-not $script:detailsForm -or $script:detailsForm.IsDisposed) { return }
+    if ($exitCode -ne 0) { $script:detailsForm.Tag.Status.Text = if ($errorOutput) { $errorOutput.Trim() } else { "Details reader exited with code $exitCode." }; return }
+    try { Update-DetailsWindow ($output | ConvertFrom-Json) } catch { $script:detailsForm.Tag.Status.Text = 'Could not parse details: ' + $_.Exception.Message }
 }
 
 function Start-UsageRefresh {
@@ -203,16 +319,22 @@ function Complete-UsageRefresh {
 }
 
 $script:refreshProcess = $null
+$script:detailsProcess = $null
+$script:detailsForm = $null
+$script:lastSnapshot = $null
 $script:nextRefresh = [DateTime]::MinValue
 $refreshItem.add_Click({ Start-UsageRefresh })
-$script:notify.add_DoubleClick({ Start-UsageRefresh; $script:notify.ShowBalloonTip(2500, 'Codex usage', $script:notify.Text, 'Info') })
+$script:notify.add_MouseClick({ param($sender, $eventArgs) if ($eventArgs.Button -eq [System.Windows.Forms.MouseButtons]::Left) { Start-DetailsRefresh } })
 $timer = [System.Windows.Forms.Timer]::new(); $timer.Interval = 250; $timer.add_Tick({
     Complete-UsageRefresh
+    Complete-DetailsRefresh
     if (-not $script:refreshProcess -and [DateTime]::Now -ge $script:nextRefresh) { Start-UsageRefresh }
 }); $timer.Start()
 $exitItem.add_Click({
     $timer.Stop()
     if ($script:refreshProcess -and -not $script:refreshProcess.HasExited) { $script:refreshProcess.Kill() }
+    if ($script:detailsProcess -and -not $script:detailsProcess.HasExited) { $script:detailsProcess.Kill() }
+    if ($script:detailsForm -and -not $script:detailsForm.IsDisposed) { $script:detailsForm.Close() }
     $script:notify.Visible = $false
     [System.Windows.Forms.Application]::Exit()
 })

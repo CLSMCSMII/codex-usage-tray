@@ -7,10 +7,11 @@ ChatGPT Business workspaces are supported. The displayed value is the limit repo
 ## Features
 
 - Displays the remaining percentage as a battery level with a number inside the tray icon
+- Opens a left-click details window with every available usage reset and reset-credit expiration date
 - Shows the usage window and reset time in the context menu
 - Refreshes automatically every 60 seconds
 - Uses color-coded remaining quota: green above 30%, orange at 11-30%, and red at 10% or below
-- Does not read `auth.json`, OAuth tokens, browser cookies, or API keys
+- Reads the Codex OAuth access token only after a left-click details request; it is never displayed, logged, or stored by this app
 - Does not send data outside the computer
 
 > **Important:** OpenAI does not currently document a public API for retrieving a regular user's remaining ChatGPT subscription or Codex quota percentage. This app therefore reads the `rate_limits` events written by the Codex client under `%USERPROFILE%\.codex\sessions`. This file format is an implementation detail and may change in a future Codex release.
@@ -68,6 +69,8 @@ CodexUsageTray/
 ## Data source and security
 
 The default provider searches only recent `*.jsonl` files under `%CODEX_HOME%\sessions` or `%USERPROFILE%\.codex\sessions`. It parses only objects containing `payload.type = token_count` and `payload.rate_limits`. Prompt and response content is neither retained nor displayed.
+
+When the user left-clicks the tray icon, the app reads the existing Codex access token from `%CODEX_HOME%\auth.json` or `%USERPROFILE%\.codex\auth.json` and sends it only to `https://chatgpt.com/backend-api/wham/rate-limit-reset-credits` over HTTPS. The token and response are kept in memory only. This ChatGPT backend endpoint is not a documented public API and may change or stop working without notice.
 
 OpenAI API usage should be implemented as a separate provider because API usage is not the same as a ChatGPT or Codex subscription quota. Such a provider should call the Organization Usage or Costs API with an Admin API key stored in Windows Credential Manager or protected with DPAPI. Never put a key in source code, configuration files, or logs. The API provides token and cost totals; displaying those totals as a percentage requires a user-defined budget.
 
