@@ -120,26 +120,26 @@ function New-UsageIcon {
         $terminalBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::White)
         $insideBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(210, 35, 35, 35))
         $levelBrush = [System.Drawing.SolidBrush]::new($levelColor)
-        $outerPen = [System.Drawing.Pen]::new([System.Drawing.Color]::Black, 3)
+        $outerPen = [System.Drawing.Pen]::new([System.Drawing.Color]::Black, 2)
         $innerPen = [System.Drawing.Pen]::new([System.Drawing.Color]::White, 1)
         try {
-            $g.FillRectangle($terminalBrush, 11, 1, 10, 5)
-            $g.DrawRectangle($outerPen, 11, 1, 10, 5)
-            $g.FillRectangle($insideBrush, 6, 7, 20, 21)
-            $fillHeight = [int][Math]::Round(20.0 * $value / 100.0)
-            if ($fillHeight -gt 0) { $g.FillRectangle($levelBrush, 7, 28 - $fillHeight, 18, $fillHeight) }
-            $g.DrawRectangle($outerPen, 4, 5, 24, 24)
-            $g.DrawRectangle($innerPen, 4, 5, 24, 24)
+            $g.FillRectangle($terminalBrush, 10, 0, 12, 4)
+            $g.DrawRectangle($outerPen, 10, 0, 12, 4)
+            $g.FillRectangle($insideBrush, 3, 4, 26, 26)
+            $fillHeight = [int][Math]::Round(24.0 * $value / 100.0)
+            if ($fillHeight -gt 0) { $g.FillRectangle($levelBrush, 4, 29 - $fillHeight, 24, $fillHeight) }
+            $g.DrawRectangle($outerPen, 2, 3, 28, 27)
+            $g.DrawRectangle($innerPen, 2, 3, 28, 27)
         } finally {
             $terminalBrush.Dispose(); $insideBrush.Dispose(); $levelBrush.Dispose(); $outerPen.Dispose(); $innerPen.Dispose()
         }
 
         $label = if ($null -eq $RemainingPercent) { '?' } else { [Math]::Round($value).ToString('0') }
-        $fontSize = if ($label.Length -gt 2) { 9 } elseif ($label.Length -gt 1) { 12 } else { 15 }
+        $fontSize = if ($label.Length -gt 2) { 13 } elseif ($label.Length -gt 1) { 19 } else { 22 }
         $font = [System.Drawing.Font]::new('Segoe UI', $fontSize, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
         $format = [System.Drawing.StringFormat]::new(); $format.Alignment = 'Center'; $format.LineAlignment = 'Center'
-        $textRect = [System.Drawing.RectangleF]::new(4, 5, 24, 25)
-        $g.DrawString($label, $font, [System.Drawing.Brushes]::Black, [System.Drawing.RectangleF]::new(5, 6, 24, 25), $format)
+        $textRect = [System.Drawing.RectangleF]::new(1, 4, 30, 26)
+        $g.DrawString($label, $font, [System.Drawing.Brushes]::Black, [System.Drawing.RectangleF]::new(2, 5, 30, 26), $format)
         $g.DrawString($label, $font, [System.Drawing.Brushes]::White, $textRect, $format)
         $font.Dispose(); $format.Dispose()
         $handle = $bmp.GetHicon()

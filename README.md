@@ -6,7 +6,7 @@ ChatGPT Business workspaces are supported. The displayed value is the limit repo
 
 ## Features
 
-- Displays the remaining percentage as a battery level with a number inside the tray icon
+- Displays the remaining percentage as a large, high-contrast battery level with a number inside the tray icon
 - Opens a left-click details window with every available usage reset and reset-credit expiration date
 - Provides a right-click **Update from GitHub** action that validates, replaces, and restarts the app in place
 - Shows the usage window and reset time in the context menu
