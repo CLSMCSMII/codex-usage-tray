@@ -2,7 +2,7 @@ param([switch]$NoUi, [switch]$Json, [switch]$Details, [string]$SessionsPath)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$script:AppVersion = '1.0.1'
+$script:AppVersion = '1.0.2'
 
 function Get-CodexSessionsPath {
     param([string]$Override)
@@ -124,23 +124,23 @@ function New-UsageIcon {
         $outerPen = [System.Drawing.Pen]::new([System.Drawing.Color]::Black, 2)
         $innerPen = [System.Drawing.Pen]::new([System.Drawing.Color]::White, 1)
         try {
-            $g.FillRectangle($terminalBrush, 10, 0, 12, 4)
-            $g.DrawRectangle($outerPen, 10, 0, 12, 4)
-            $g.FillRectangle($insideBrush, 3, 4, 26, 26)
-            $fillHeight = [int][Math]::Round(24.0 * $value / 100.0)
-            if ($fillHeight -gt 0) { $g.FillRectangle($levelBrush, 4, 29 - $fillHeight, 24, $fillHeight) }
-            $g.DrawRectangle($outerPen, 2, 3, 28, 27)
-            $g.DrawRectangle($innerPen, 2, 3, 28, 27)
+            $g.FillRectangle($terminalBrush, 10, 0, 12, 3)
+            $g.DrawRectangle($outerPen, 10, 0, 12, 3)
+            $g.FillRectangle($insideBrush, 2, 3, 28, 28)
+            $fillHeight = [int][Math]::Round(26.0 * $value / 100.0)
+            if ($fillHeight -gt 0) { $g.FillRectangle($levelBrush, 2, 30 - $fillHeight, 28, $fillHeight) }
+            $g.DrawRectangle($outerPen, 1, 2, 30, 29)
+            $g.DrawRectangle($innerPen, 1, 2, 30, 29)
         } finally {
             $terminalBrush.Dispose(); $insideBrush.Dispose(); $levelBrush.Dispose(); $outerPen.Dispose(); $innerPen.Dispose()
         }
 
         $label = if ($null -eq $RemainingPercent) { '?' } else { [Math]::Round($value).ToString('0') }
-        $fontSize = if ($label.Length -gt 2) { 13 } elseif ($label.Length -gt 1) { 19 } else { 22 }
+        $fontSize = if ($label.Length -gt 2) { 14 } elseif ($label.Length -gt 1) { 20 } else { 23 }
         $font = [System.Drawing.Font]::new('Segoe UI', $fontSize, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
         $format = [System.Drawing.StringFormat]::new(); $format.Alignment = 'Center'; $format.LineAlignment = 'Center'
-        $textRect = [System.Drawing.RectangleF]::new(1, 4, 30, 26)
-        $g.DrawString($label, $font, [System.Drawing.Brushes]::Black, [System.Drawing.RectangleF]::new(2, 5, 30, 26), $format)
+        $textRect = [System.Drawing.RectangleF]::new(0, 3, 32, 28)
+        $g.DrawString($label, $font, [System.Drawing.Brushes]::Black, [System.Drawing.RectangleF]::new(1, 4, 32, 28), $format)
         $g.DrawString($label, $font, [System.Drawing.Brushes]::White, $textRect, $format)
         $font.Dispose(); $format.Dispose()
         $handle = $bmp.GetHicon()
