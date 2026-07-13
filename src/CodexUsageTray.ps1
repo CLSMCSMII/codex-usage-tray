@@ -157,10 +157,45 @@ $windowItem = $menu.Items.Add(''); $windowItem.Enabled = $false
 $resetItem = $menu.Items.Add(''); $resetItem.Enabled = $false
 [void]$menu.Items.Add('-')
 $refreshItem = $menu.Items.Add('Refresh now')
+$updateItem = $menu.Items.Add('Update from GitHub')
 $startupItem = $menu.Items.Add('Open at sign-in')
 $startupItem.CheckOnClick = $true
 $exitItem = $menu.Items.Add('Exit')
 $script:notify.ContextMenuStrip = $menu
+$script:updateResultPath = Join-Path (Split-Path (Split-Path $PSCommandPath)) 'update-result.json'
+$script:updateResultShown = $false
+
+function Show-PendingUpdateResult {
+    if ($script:updateResultShown -or -not (Test-Path -LiteralPath $script:updateResultPath)) { return }
+    $script:updateResultShown = $true
+    try {
+        $result = Get-Content -Raw -LiteralPath $script:updateResultPath | ConvertFrom-Json
+        $title = if ($result.success) { 'Update complete' } else { 'Update failed' }
+        $icon = if ($result.success) { 'Info' } else { 'Error' }
+        $script:notify.ShowBalloonTip(5000, $title, [string]$result.message, $icon)
+    } catch {} finally { Remove-Item -LiteralPath $script:updateResultPath -Force -ErrorAction SilentlyContinue }
+}
+
+function Start-SelfUpdate {
+    $choice = [System.Windows.Forms.MessageBox]::Show(
+        'Download the latest main branch from GitHub, restart the tray app, and keep the current tray placement?',
+        'Update Codex Usage Tray',
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Question
+    )
+    if ($choice -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+    $updaterPath = Join-Path (Split-Path $PSCommandPath) 'Updater.ps1'
+    if (-not (Test-Path -LiteralPath $updaterPath)) {
+        [void][System.Windows.Forms.MessageBox]::Show('Updater.ps1 is missing. Reinstall the latest package manually.', 'Update unavailable', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        return
+    }
+    $installRoot = Split-Path (Split-Path $PSCommandPath)
+    $updateItem.Enabled = $false; $statusItem.Text = 'Starting update...'
+    $arguments = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -ParentProcessId {1} -InstallRoot "{2}" -Repository "CLSMCSMII/codex-usage-tray"' -f $updaterPath, $PID, $installRoot
+    Start-Process powershell.exe -WindowStyle Hidden -ArgumentList $arguments
+    $script:notify.Visible = $false
+    [System.Windows.Forms.Application]::Exit()
+}
 
 function Format-WindowDuration {
     param([int]$Minutes)
@@ -253,6 +288,7 @@ function Set-TrayUsage {
         if ($script:lastIcon) { $script:lastIcon.Dispose() }
         $script:lastIcon = $newIcon
         $script:notify.Text = $tip.Substring(0, [Math]::Min(63, $tip.Length))
+        Show-PendingUpdateResult
     } catch {
         $statusItem.Text = 'Could not read Codex usage'; $windowItem.Text = $_.Exception.Message; $resetItem.Text = ''
     }
@@ -324,6 +360,7 @@ $script:detailsForm = $null
 $script:lastSnapshot = $null
 $script:nextRefresh = [DateTime]::MinValue
 $refreshItem.add_Click({ Start-UsageRefresh })
+$updateItem.add_Click({ Start-SelfUpdate })
 $script:notify.add_MouseClick({ param($sender, $eventArgs) if ($eventArgs.Button -eq [System.Windows.Forms.MouseButtons]::Left) { Start-DetailsRefresh } })
 $timer = [System.Windows.Forms.Timer]::new(); $timer.Interval = 250; $timer.add_Tick({
     Complete-UsageRefresh

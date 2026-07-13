@@ -8,6 +8,7 @@ ChatGPT Business workspaces are supported. The displayed value is the limit repo
 
 - Displays the remaining percentage as a battery level with a number inside the tray icon
 - Opens a left-click details window with every available usage reset and reset-credit expiration date
+- Provides a right-click **Update from GitHub** action that validates, replaces, and restarts the app in place
 - Shows the usage window and reset time in the context menu
 - Refreshes automatically every 60 seconds
 - Uses color-coded remaining quota: green above 30%, orange at 11-30%, and red at 10% or below
@@ -60,7 +61,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Parser.Tests.ps1
 ```text
 CodexUsageTray/
   src/CodexUsageTray.ps1   Tray app and usage parser
+  src/Updater.ps1          In-place GitHub updater and rollback helper
   tests/Parser.Tests.ps1   Parser smoke test with fixture data
+  tests/Updater.Tests.ps1  Isolated updater integration test
   Install.ps1              Per-user installer and Startup setup
   Uninstall.ps1            Per-user uninstaller
   LICENSE                  MIT License
@@ -71,6 +74,14 @@ CodexUsageTray/
 The default provider searches only recent `*.jsonl` files under `%CODEX_HOME%\sessions` or `%USERPROFILE%\.codex\sessions`. It parses only objects containing `payload.type = token_count` and `payload.rate_limits`. Prompt and response content is neither retained nor displayed.
 
 When the user left-clicks the tray icon, the app reads the existing Codex access token from `%CODEX_HOME%\auth.json` or `%USERPROFILE%\.codex\auth.json` and sends it only to `https://chatgpt.com/backend-api/wham/rate-limit-reset-credits` over HTTPS. The token and response are kept in memory only. This ChatGPT backend endpoint is not a documented public API and may change or stop working without notice.
+
+## Updating from GitHub
+
+Right-click the tray icon and select **Update from GitHub**. After confirmation, the updater downloads the `main` branch from `CLSMCSMII/codex-usage-tray` over HTTPS, validates every required project file, closes the old process, replaces the installation in place, and starts the new process. If replacement fails, it restores the previous app script and restarts it.
+
+The updater does not remove or recreate the Startup shortcut, and it keeps the same executable, script path, tooltip, and icon identity so Windows can retain the visible system-tray placement. Windows owns tray ordering, so exact placement cannot be guaranteed across major Windows or Explorer changes.
+
+Because this mechanism runs code downloaded from the repository, protect the GitHub account and repository with strong authentication and review changes before publishing them.
 
 OpenAI API usage should be implemented as a separate provider because API usage is not the same as a ChatGPT or Codex subscription quota. Such a provider should call the Organization Usage or Costs API with an Admin API key stored in Windows Credential Manager or protected with DPAPI. Never put a key in source code, configuration files, or logs. The API provides token and cost totals; displaying those totals as a percentage requires a user-defined budget.
 
