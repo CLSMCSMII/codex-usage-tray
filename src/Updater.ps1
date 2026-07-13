@@ -3,6 +3,8 @@ param(
     [Parameter(Mandatory)][string]$InstallRoot,
     [string]$Repository = 'CLSMCSMII/codex-usage-tray',
     [string]$SourceArchive,
+    [switch]$CheckOnly,
+    [string]$CurrentVersion,
     [switch]$ValidateOnly,
     [switch]$NoRestart
 )
@@ -32,6 +34,16 @@ function Start-TrayApp {
     }
 }
 
+function Get-SourceVersion {
+    param([Parameter(Mandatory)][string]$SourceRoot)
+    $sourceAppPath = Join-Path $SourceRoot 'src\CodexUsageTray.ps1'
+    $content = Get-Content -Raw -LiteralPath $sourceAppPath
+    $match = [regex]::Match($content, '(?m)^\s*\$script:AppVersion\s*=\s*''([^'']+)''\s*$')
+    if (-not $match.Success) { throw 'The downloaded update has no valid app version.' }
+    try { return [version]$match.Groups[1].Value }
+    catch { throw "The downloaded app version '$($match.Groups[1].Value)' is invalid." }
+}
+
 New-Item -ItemType Directory -Path $tempRoot, $extractPath -Force | Out-Null
 try {
     if ($SourceArchive) { Copy-Item -LiteralPath $SourceArchive -Destination $archivePath -Force }
@@ -44,6 +56,18 @@ try {
     $required = @('src\CodexUsageTray.ps1', 'src\Updater.ps1', 'Install.ps1', 'Uninstall.ps1', 'README.md', 'LICENSE')
     foreach ($relative in $required) {
         if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot $relative))) { throw "The downloaded update is missing $relative." }
+    }
+    $latestVersion = Get-SourceVersion -SourceRoot $sourceRoot
+    if ($CheckOnly) {
+        if (-not $CurrentVersion) { throw 'CurrentVersion is required when CheckOnly is used.' }
+        try { $installedVersion = [version]$CurrentVersion }
+        catch { throw "The installed app version '$CurrentVersion' is invalid." }
+        [pscustomobject]@{
+            currentVersion = $installedVersion.ToString()
+            latestVersion = $latestVersion.ToString()
+            updateAvailable = ($latestVersion -gt $installedVersion)
+        } | ConvertTo-Json -Compress
+        return
     }
     if ($ValidateOnly) { Write-Host 'PASS: update archive contains every required file.'; return }
 

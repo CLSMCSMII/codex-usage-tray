@@ -2,7 +2,7 @@ param([switch]$NoUi, [switch]$Json, [switch]$Details, [switch]$LocalOnly, [strin
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$script:AppVersion = '1.1.0'
+$script:AppVersion = '1.2.0'
 
 function Get-CodexSessionsPath {
     param([string]$Override)
@@ -200,7 +200,7 @@ $windowItem = $menu.Items.Add(''); $windowItem.Enabled = $false
 $resetItem = $menu.Items.Add(''); $resetItem.Enabled = $false
 [void]$menu.Items.Add('-')
 $refreshItem = $menu.Items.Add('Refresh now')
-$updateItem = $menu.Items.Add('Update from GitHub')
+$updateItem = $menu.Items.Add('Check for update')
 $startupItem = $menu.Items.Add('Open at sign-in')
 $startupItem.CheckOnClick = $true
 $versionItem = $menu.Items.Add("Version $script:AppVersion")
@@ -222,13 +222,6 @@ function Show-PendingUpdateResult {
 }
 
 function Start-SelfUpdate {
-    $choice = [System.Windows.Forms.MessageBox]::Show(
-        'Download the latest main branch from GitHub, restart the tray app, and keep the current tray placement?',
-        'Update Codex Usage Tray',
-        [System.Windows.Forms.MessageBoxButtons]::YesNo,
-        [System.Windows.Forms.MessageBoxIcon]::Question
-    )
-    if ($choice -ne [System.Windows.Forms.DialogResult]::Yes) { return }
     $updaterPath = Join-Path (Split-Path $PSCommandPath) 'Updater.ps1'
     if (-not (Test-Path -LiteralPath $updaterPath)) {
         [void][System.Windows.Forms.MessageBox]::Show('Updater.ps1 is missing. Reinstall the latest package manually.', 'Update unavailable', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
@@ -240,6 +233,59 @@ function Start-SelfUpdate {
     Start-Process powershell.exe -WindowStyle Hidden -ArgumentList $arguments
     $script:notify.Visible = $false
     [System.Windows.Forms.Application]::Exit()
+}
+
+function Start-UpdateCheck {
+    if ($script:updateCheckProcess -and -not $script:updateCheckProcess.HasExited) { return }
+    $updaterPath = Join-Path (Split-Path $PSCommandPath) 'Updater.ps1'
+    if (-not (Test-Path -LiteralPath $updaterPath)) {
+        [void][System.Windows.Forms.MessageBox]::Show('Updater.ps1 is missing. Reinstall the latest package manually.', 'Update unavailable', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        return
+    }
+    $script:updatePreviousStatus = $statusItem.Text
+    $statusItem.Text = 'Checking for update...'
+    $updateItem.Enabled = $false
+    $installRoot = Split-Path (Split-Path $PSCommandPath)
+    $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -InstallRoot "{1}" -Repository "CLSMCSMII/codex-usage-tray" -CheckOnly -CurrentVersion "{2}"' -f $updaterPath, $installRoot, $script:AppVersion
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = 'powershell.exe'
+    $startInfo.Arguments = $arguments
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $script:updateCheckProcess = [System.Diagnostics.Process]::new()
+    $script:updateCheckProcess.StartInfo = $startInfo
+    if (-not $script:updateCheckProcess.Start()) { throw 'Could not start the update check.' }
+}
+
+function Complete-UpdateCheck {
+    if (-not $script:updateCheckProcess -or -not $script:updateCheckProcess.HasExited) { return }
+    $output = $script:updateCheckProcess.StandardOutput.ReadToEnd()
+    $errorOutput = $script:updateCheckProcess.StandardError.ReadToEnd()
+    $exitCode = $script:updateCheckProcess.ExitCode
+    $script:updateCheckProcess.Dispose()
+    $script:updateCheckProcess = $null
+    $updateItem.Enabled = $true
+    $statusItem.Text = $script:updatePreviousStatus
+    if ($exitCode -ne 0) {
+        $message = if ($errorOutput) { $errorOutput.Trim() } else { "Update check exited with code $exitCode." }
+        [void][System.Windows.Forms.MessageBox]::Show($message, 'Could not check for updates', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        return
+    }
+    try { $result = $output | ConvertFrom-Json }
+    catch {
+        [void][System.Windows.Forms.MessageBox]::Show('GitHub returned an invalid update response.', 'Could not check for updates', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        return
+    }
+    if (-not $result.updateAvailable) { return }
+    $choice = [System.Windows.Forms.MessageBox]::Show(
+        "Current version: $($result.currentVersion)`r`nLatest version: $($result.latestVersion)`r`n`r`nDownload and install the update now?",
+        'Codex Usage Tray update available',
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Information
+    )
+    if ($choice -eq [System.Windows.Forms.DialogResult]::Yes) { Start-SelfUpdate }
 }
 
 function Format-WindowDuration {
@@ -412,21 +458,25 @@ function Complete-UsageRefresh {
 
 $script:refreshProcess = $null
 $script:detailsProcess = $null
+$script:updateCheckProcess = $null
+$script:updatePreviousStatus = ''
 $script:detailsForm = $null
 $script:lastSnapshot = $null
 $script:nextRefresh = [DateTime]::MinValue
 $refreshItem.add_Click({ Start-UsageRefresh })
-$updateItem.add_Click({ Start-SelfUpdate })
+$updateItem.add_Click({ Start-UpdateCheck })
 $script:notify.add_MouseClick({ param($sender, $eventArgs) if ($eventArgs.Button -eq [System.Windows.Forms.MouseButtons]::Left) { Start-DetailsRefresh } })
 $timer = [System.Windows.Forms.Timer]::new(); $timer.Interval = 250; $timer.add_Tick({
     Complete-UsageRefresh
     Complete-DetailsRefresh
+    Complete-UpdateCheck
     if (-not $script:refreshProcess -and [DateTime]::Now -ge $script:nextRefresh) { Start-UsageRefresh }
 }); $timer.Start()
 $exitItem.add_Click({
     $timer.Stop()
     if ($script:refreshProcess -and -not $script:refreshProcess.HasExited) { $script:refreshProcess.Kill() }
     if ($script:detailsProcess -and -not $script:detailsProcess.HasExited) { $script:detailsProcess.Kill() }
+    if ($script:updateCheckProcess -and -not $script:updateCheckProcess.HasExited) { $script:updateCheckProcess.Kill() }
     if ($script:detailsForm -and -not $script:detailsForm.IsDisposed) { $script:detailsForm.Close() }
     $script:notify.Visible = $false
     [System.Windows.Forms.Application]::Exit()

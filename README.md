@@ -10,7 +10,7 @@ ChatGPT Business workspaces are supported. The displayed value is the limit repo
 
 - Displays the remaining percentage as a large, high-contrast battery level with a number inside the tray icon
 - Opens a left-click details window with every available usage reset and reset-credit expiration date
-- Provides a right-click **Update from GitHub** action that validates, replaces, and restarts the app in place
+- Provides a right-click **Check for update** action that stays quiet when current and shows both version numbers when an update is available
 - Shows its semantic version in the right-click menu, usage window title, and tooltip
 - Closes the usage and reset-credit window when **Escape** is pressed
 - Shows the usage window and reset time in the context menu
@@ -81,7 +81,7 @@ The app reads the existing Codex access token from `%CODEX_HOME%\auth.json` or `
 
 ## Updating from GitHub
 
-Right-click the tray icon and select **Update from GitHub**. After confirmation, the updater downloads the `main` branch from `CLSMCSMII/codex-usage-tray` over HTTPS, validates every required project file, closes the old process, replaces the installation in place, and starts the new process. If replacement fails, it restores the previous app script and restarts it.
+Right-click the tray icon and select **Check for update**. The check runs in the background and does nothing when the installed version is already current. When a newer version exists on the `main` branch of `CLSMCSMII/codex-usage-tray`, the app shows the installed and latest version numbers and asks whether to install it. The updater then validates every required project file, closes the old process, replaces the installation in place, and starts the new process. If replacement fails, it restores the previous app script and restarts it.
 
 The updater does not remove or recreate the Startup shortcut, and it keeps the same executable, script path, tooltip, and icon identity so Windows can retain the visible system-tray placement. Windows owns tray ordering, so exact placement cannot be guaranteed across major Windows or Explorer changes.
 
