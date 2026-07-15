@@ -113,6 +113,7 @@ try {
     Assert-Matches $installerText 'install-staging-' 'The installer does not stage a complete installation before replacement.'
     Assert-Matches $installerText 'previous-install' 'The installer does not retain a full rollback copy.'
     Assert-Matches $installerText 'oldInstallWasRunning' 'Installer rollback does not track whether the previous tray process was running.'
+    Assert-Matches $installerText 'trayProcesses' 'Installer running-state tracking does not distinguish the tray from a standalone updater process.'
     Assert-Matches $installerText 'Start-InstalledTray' 'Installer rollback cannot restart a restored previous installation.'
     Assert-Matches $uninstallerText '(?i)-File' 'The uninstaller does not require an exact -File script invocation before stopping a process.'
     if ($uninstallerText -match '-like\s+"\*\$target\*CodexUsageTray\.ps1\*"') { throw 'The uninstaller still uses a broad command-line wildcard that can kill unrelated processes.' }

@@ -53,19 +53,20 @@ function Get-ExactScriptProcesses {
 }
 
 function Stop-InstalledProcesses {
-    $paths = @(
-        (Join-Path $target 'src\CodexUsageTray.ps1'),
-        (Join-Path $target 'src\Updater.ps1')
-    )
-    $processes = @(Get-ExactScriptProcesses -ScriptPaths $paths)
-    $hadRunningProcess = $processes.Count -gt 0
+    $appScriptPath = Join-Path $target 'src\CodexUsageTray.ps1'
+    $updaterScriptPath = Join-Path $target 'src\Updater.ps1'
+    $trayProcesses = @(Get-ExactScriptProcesses -ScriptPaths @($appScriptPath))
+    $updaterProcesses = @(Get-ExactScriptProcesses -ScriptPaths @($updaterScriptPath))
+    $processes = @($trayProcesses + $updaterProcesses | Sort-Object ProcessId -Unique)
+    $hadRunningTray = $trayProcesses.Count -gt 0
     foreach ($process in $processes) {
         Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
     }
+    $paths = @($appScriptPath, $updaterScriptPath)
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     do {
         $remaining = @(Get-ExactScriptProcesses -ScriptPaths $paths)
-        if ($remaining.Count -eq 0) { return $hadRunningProcess }
+        if ($remaining.Count -eq 0) { return $hadRunningTray }
         Start-Sleep -Milliseconds 200
     } while ([DateTime]::UtcNow -lt $deadline)
     throw 'One or more existing Codex Usage Tray processes could not be stopped.'
