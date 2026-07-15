@@ -261,7 +261,7 @@ try {
     if ($parentProcess) { $parentProcess.Dispose() }
     if ($updateMutexHeld -and $updateMutex) { try { $updateMutex.ReleaseMutex() } catch {} }
     if ($updateMutex) { $updateMutex.Dispose() }
-    if ($DeleteSourceArchive -and $SourceArchive) { Remove-Item -LiteralPath $SourceArchive -Force -ErrorAction SilentlyContinue }
+    if ($DeleteSourceArchive -and $SourceArchive -and $transactionStarted) { Remove-Item -LiteralPath $SourceArchive -Force -ErrorAction SilentlyContinue }
     Remove-Item -LiteralPath $stagePath -Recurse -Force -ErrorAction SilentlyContinue
     if ($updateSucceeded) { Remove-Item -LiteralPath $previousInstallPath -Recurse -Force -ErrorAction SilentlyContinue }
     Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue

@@ -41,13 +41,19 @@ try {
         $deadline = [DateTime]::UtcNow.AddSeconds(5)
         while (-not (Test-Path -LiteralPath $lockMarker) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
         if (-not (Test-Path -LiteralPath $lockMarker)) { throw 'The mutex contention test could not acquire its setup mutex.' }
-        $blockedRoot = Join-Path $testRoot 'must-not-be-created'
+        $blockedRoot = Join-Path $testRoot 'locked-install'
+        New-Item -ItemType Directory -Path $blockedRoot -Force | Out-Null
+        $blockedArchive = Join-Path $blockedRoot 'pending-update-mutex-test.zip'
+        Copy-Item -LiteralPath $archivePath -Destination $blockedArchive -Force
+        $blockedArchiveHash = (Get-FileHash -LiteralPath $blockedArchive -Algorithm SHA256).Hash
         $mutexRejected = $false
         try {
-            & $updater -InstallRoot $blockedRoot -SourceArchive $archivePath -ExpectedArchiveSha256 ([string]$available.archiveSha256) -ExpectedVersion '1.3.0' -MutexTimeoutSec 1 -NoRestart
+            & $updater -InstallRoot $blockedRoot -SourceArchive $blockedArchive -ExpectedArchiveSha256 ([string]$available.archiveSha256) -ExpectedVersion '1.3.0' -DeleteSourceArchive -MutexTimeoutSec 1 -NoRestart
         } catch { $mutexRejected = $_.Exception.Message -match 'still running' }
         if (-not $mutexRejected) { throw 'Updater did not reject apply mode while another transaction owned the mutex.' }
-        if (Test-Path -LiteralPath $blockedRoot) { throw 'Updater mutated the installation root without owning the update mutex.' }
+        if (-not (Test-Path -LiteralPath $blockedArchive -PathType Leaf)) { throw 'Updater deleted the pending archive without owning the update mutex.' }
+        if ((Get-FileHash -LiteralPath $blockedArchive -Algorithm SHA256).Hash -ne $blockedArchiveHash) { throw 'Updater modified the pending archive without owning the update mutex.' }
+        if (Test-Path -LiteralPath (Join-Path $blockedRoot 'update-result.json')) { throw 'Updater wrote an update result without owning the update mutex.' }
         Write-Host 'PASS: updater performs no installation mutation without owning the update mutex.' -ForegroundColor Green
     } finally {
         if (-not $lockProcess.HasExited) { $lockProcess.Kill(); [void]$lockProcess.WaitForExit(5000) }
