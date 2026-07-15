@@ -113,6 +113,7 @@ try {
     Assert-Matches $installerText 'install-staging-' 'The installer does not stage a complete installation before replacement.'
     Assert-Matches $installerText 'previous-install' 'The installer does not retain a full rollback copy.'
     Assert-Matches $installerText 'oldInstallWasRunning' 'Installer rollback does not track whether the previous tray process was running.'
+    Assert-Matches $installerText 'installTransactionStarted' 'Installer rollback can mutate live state before the installer owns the update mutex.'
     Assert-Matches $installerText 'trayProcesses' 'Installer running-state tracking does not distinguish the tray from a standalone updater process.'
     Assert-Matches $installerText 'Start-InstalledTray' 'Installer rollback cannot restart a restored previous installation.'
     Assert-Matches $uninstallerText '(?i)-File' 'The uninstaller does not require an exact -File script invocation before stopping a process.'

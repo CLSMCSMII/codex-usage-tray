@@ -14,6 +14,7 @@ $oldInstallMoved = $false
 $newInstallMoved = $false
 $installationSucceeded = $false
 $oldInstallWasRunning = $false
+$installTransactionStarted = $false
 $shortcutExisted = Test-Path -LiteralPath $startup -PathType Leaf
 
 function Assert-SourcePackage {
@@ -98,6 +99,7 @@ try {
     try { $updateMutexHeld = $updateMutex.WaitOne([TimeSpan]::FromMinutes(3)) }
     catch [System.Threading.AbandonedMutexException] { $updateMutexHeld = $true }
     if (-not $updateMutexHeld) { throw 'Another install, update, or uninstall operation is still running.' }
+    $installTransactionStarted = $true
 
     $oldInstallWasRunning = [bool](Stop-InstalledProcesses)
     if (Test-Path -LiteralPath $target) {
@@ -113,6 +115,7 @@ try {
     Write-Host "Installed Codex Usage Tray to $target"
 } catch {
     $failure = $_.Exception.Message
+    if (-not $installTransactionStarted) { throw "Installation failed: $failure" }
     try {
         if ($newInstallMoved -and (Test-Path -LiteralPath $target)) {
             Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction Stop
