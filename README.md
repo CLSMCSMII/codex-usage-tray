@@ -1,6 +1,6 @@
 # Codex Usage Tray for Windows
 
-Current version: **1.1.0**
+Current version: **1.3.0**
 
 A lightweight Windows system tray app that reads the latest usage percentage from local Codex session files in read-only mode and displays the remaining quota as a battery icon next to the clock.
 
@@ -18,7 +18,9 @@ ChatGPT Business workspaces are supported. The displayed value is the limit repo
 - Refreshes automatically every 60 seconds
 - Uses color-coded remaining quota: green above 30%, orange at 11-30%, and red at 10% or below
 - Reads the Codex OAuth access token for live usage refreshes and left-click reset-credit requests; it is never displayed, logged, or stored by this app
-- Does not send data outside the computer
+- Sends authenticated requests only to the ChatGPT usage and reset-credit endpoints; it does not upload prompt or response content
+- Rejects expired local snapshots instead of displaying stale quota data
+- Prevents duplicate tray instances for the same signed-in Windows session
 
 > **Important:** OpenAI does not currently document a public API for retrieving a regular user's remaining ChatGPT subscription or Codex quota percentage. This app therefore reads the `rate_limits` events written by the Codex client under `%USERPROFILE%\.codex\sessions`. This file format is an implementation detail and may change in a future Codex release.
 
@@ -61,6 +63,14 @@ Run the parser smoke test without opening the UI:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Parser.Tests.ps1
 ```
 
+Run the updater and regression tests:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Updater.Tests.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Regression.Tests.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Syntax.Tests.ps1
+```
+
 ## Project structure
 
 ```text
@@ -70,6 +80,8 @@ CodexUsageTray/
   Launcher.vbs             Windowless app launcher
   tests/Parser.Tests.ps1   Parser smoke test with fixture data
   tests/Updater.Tests.ps1  Isolated updater integration test
+  tests/Regression.Tests.ps1 Runtime, deployment-safety, and documentation regressions
+  tests/Syntax.Tests.ps1   PowerShell parser validation for every script
   Install.ps1              Per-user installer and Startup setup
   Uninstall.ps1            Per-user uninstaller
   LICENSE                  MIT License
@@ -83,11 +95,11 @@ The app reads the existing Codex access token from `%CODEX_HOME%\auth.json` or `
 
 ## Updating from GitHub
 
-Right-click the tray icon and select **Check for update**. The check runs in the background and displays a confirmation when the installed version is already current; press **OK** or **Escape** to close it. When a newer version exists on the `main` branch of `CLSMCSMII/codex-usage-tray`, the app shows the installed and latest version numbers and asks whether to install it. The updater then validates every required project file, closes the old process, replaces the installation in place, and starts the new process. If replacement fails, it restores the previous app script and restarts it.
+Right-click the tray icon and select **Check for update**. The check runs in the background and displays a confirmation when the installed version is already current; press **OK** or **Escape** to close it. When a newer version exists on the `main` branch of `CLSMCSMII/codex-usage-tray`, the app downloads that exact commit once, validates every required file and PowerShell script, records the archive SHA-256, and asks whether to install that specific archive. The updater verifies the approved version and SHA-256 again, stages the complete installation, closes the old process, and replaces the installation. If deployment or restart fails, it restores the complete previous installation before restarting it.
 
 The updater does not remove or recreate the Startup shortcut, and it keeps the same executable, script path, tooltip, and icon identity so Windows can retain the visible system-tray placement. Windows owns tray ordering, so exact placement cannot be guaranteed across major Windows or Explorer changes.
 
-Because this mechanism runs code downloaded from the repository, protect the GitHub account and repository with strong authentication and review changes before publishing them.
+The SHA-256 check prevents the archive from changing between approval and installation. GitHub and the repository owner remain the update trust root, so protect the GitHub account and repository with strong authentication and review changes before publishing them.
 
 OpenAI API usage should be implemented as a separate provider because API usage is not the same as a ChatGPT or Codex subscription quota. Such a provider should call the Organization Usage or Costs API with an Admin API key stored in Windows Credential Manager or protected with DPAPI. Never put a key in source code, configuration files, or logs. The API provides token and cost totals; displaying those totals as a percentage requires a user-defined budget.
 

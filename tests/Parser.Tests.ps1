@@ -3,7 +3,18 @@ $app = Join-Path $PSScriptRoot '..\src\CodexUsageTray.ps1'
 $temp = Join-Path $PSScriptRoot ('.tmp-' + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $temp | Out-Null
 try {
-    $line = '{"timestamp":"2026-07-13T00:00:00Z","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","plan_type":"test","primary":{"used_percent":42.5,"window_minutes":300,"resets_at":1783904400},"secondary":null}}}'
+    $line = [pscustomobject]@{
+        timestamp = [DateTime]::UtcNow.ToString('o')
+        payload = [pscustomobject]@{
+            type = 'token_count'
+            rate_limits = [pscustomobject]@{
+                limit_id = 'codex'
+                plan_type = 'test'
+                primary = [pscustomobject]@{ used_percent = 42.5; window_minutes = 300; resets_at = 4102444800 }
+                secondary = $null
+            }
+        }
+    } | ConvertTo-Json -Compress -Depth 8
     [IO.File]::WriteAllText((Join-Path $temp 'fixture.jsonl'), $line)
     $result = & $app -NoUi -LocalOnly -SessionsPath $temp
     if (-not $result) { throw 'Expected a usage snapshot.' }

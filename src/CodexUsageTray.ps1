@@ -2,7 +2,11 @@ param([switch]$NoUi, [switch]$Json, [switch]$Details, [switch]$LocalOnly, [switc
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$script:AppVersion = '1.2.3'
+$script:AppVersion = '1.3.0'
+$script:ApiTimeoutSec = 20
+$script:ChildProcessTimeoutSec = 45
+$script:UpdateCheckTimeoutSec = 180
+$script:MaxLocalSnapshotAgeHours = 24
 
 $script:installRoot = Split-Path (Split-Path $PSCommandPath)
 $script:launcherPath = Join-Path $script:installRoot 'Launcher.vbs'
@@ -26,6 +30,16 @@ if (-not $NoUi -and -not $HiddenLaunch) {
     $launcherArgument = '"' + $script:launcherPath + '"'
     Start-Process (Join-Path $env:SystemRoot 'System32\wscript.exe') -WindowStyle Hidden -ArgumentList @('//B', '//NoLogo', $launcherArgument)
     return
+}
+
+$script:singleInstanceMutex = $null
+if (-not $NoUi) {
+    $createdNew = $false
+    $script:singleInstanceMutex = [System.Threading.Mutex]::new($true, 'Local\CLSMCSMII.CodexUsageTray', [ref]$createdNew)
+    if (-not $createdNew) {
+        $script:singleInstanceMutex.Dispose()
+        return
+    }
 }
 
 function Get-CodexSessionsPath {
@@ -68,19 +82,28 @@ function ConvertTo-UsageSnapshot {
 function Get-LatestCodexUsage {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
-    $files = Get-ChildItem -LiteralPath $Path -Recurse -Filter '*.jsonl' -File -ErrorAction SilentlyContinue |
-        Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 12
+    $files = Get-ChildItem -LiteralPath $Path -Recurse -Filter '*.jsonl' -File -ErrorAction SilentlyContinue
+    $latestSnapshot = $null
     foreach ($file in $files) {
         $lines = @(Get-Content -LiteralPath $file.FullName -Tail 500 -ErrorAction SilentlyContinue)
         for ($i = $lines.Count - 1; $i -ge 0; $i--) {
             if ($lines[$i] -notmatch '"rate_limits"') { continue }
             try {
                 $snapshot = ConvertTo-UsageSnapshot -Event ($lines[$i] | ConvertFrom-Json) -SourceFile $file.FullName
-                if ($snapshot) { return $snapshot }
+                if ($snapshot -and ($null -eq $latestSnapshot -or $snapshot.Timestamp -gt $latestSnapshot.Timestamp)) {
+                    $latestSnapshot = $snapshot
+                }
+                if ($snapshot) { break }
             } catch { continue }
         }
     }
-    return $null
+    if ($latestSnapshot) {
+        $snapshotAge = [DateTime]::Now - [DateTime]$latestSnapshot.Timestamp
+        if ($snapshotAge.TotalHours -gt $script:MaxLocalSnapshotAgeHours -or $snapshotAge.TotalMinutes -lt -5) { return $null }
+        $displayWindow = @($latestSnapshot.Windows)[0]
+        if ($displayWindow.ResetsAt -and [DateTime]$displayWindow.ResetsAt -le [DateTime]::Now) { return $null }
+    }
+    return $latestSnapshot
 }
 
 function Get-CodexAccessToken {
@@ -96,7 +119,7 @@ function Get-CodexAccessToken {
 function Get-LiveCodexUsage {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $accessToken = Get-CodexAccessToken
-    $response = Invoke-RestMethod -Uri 'https://chatgpt.com/backend-api/wham/usage?supports_rewardless_invites=true' -Headers @{
+    $response = Invoke-RestMethod -Uri 'https://chatgpt.com/backend-api/wham/usage?supports_rewardless_invites=true' -TimeoutSec $script:ApiTimeoutSec -Headers @{
         Authorization = "Bearer $accessToken"
         originator = 'Codex Desktop'
         'OAI-Product-Sku' = 'CODEX'
@@ -130,7 +153,7 @@ function Get-LiveCodexUsage {
 function Get-AvailableResetCredits {
     $accessToken = Get-CodexAccessToken
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $response = Invoke-RestMethod -Uri 'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits' -Headers @{
+    $response = Invoke-RestMethod -Uri 'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits' -TimeoutSec $script:ApiTimeoutSec -Headers @{
         Authorization = "Bearer $accessToken"
         originator = 'Codex Desktop'
         'OAI-Product-Sku' = 'CODEX'
@@ -245,16 +268,66 @@ function Show-PendingUpdateResult {
     } catch {} finally { Remove-Item -LiteralPath $script:updateResultPath -Force -ErrorAction SilentlyContinue }
 }
 
+function Remove-PendingUpdateArchive {
+    param($Result)
+    if (-not $Result -or -not $Result.archivePath) { return }
+    try {
+        $installRoot = [IO.Path]::GetFullPath((Split-Path (Split-Path $PSCommandPath)))
+        $candidate = [IO.Path]::GetFullPath([string]$Result.archivePath)
+        $prefix = $installRoot.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+        if ($candidate.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -and [IO.Path]::GetFileName($candidate) -like 'pending-update-*.zip') {
+            Remove-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue
+        }
+    } catch {}
+}
+
 function Start-SelfUpdate {
+    param([Parameter(Mandatory)]$Update)
     $updaterPath = Join-Path (Split-Path $PSCommandPath) 'Updater.ps1'
-    if (-not (Test-Path -LiteralPath $updaterPath)) {
+    if (-not (Test-Path -LiteralPath $updaterPath -PathType Leaf)) {
         [void][System.Windows.Forms.MessageBox]::Show('Updater.ps1 is missing. Reinstall the latest package manually.', 'Update unavailable', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        return
+    }
+    $archivePath = [string]$Update.archivePath
+    $archiveSha256 = [string]$Update.archiveSha256
+    $latestVersion = [string]$Update.latestVersion
+    $sourceCommit = [string]$Update.sourceCommit
+    if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf) -or $archivePath.Contains('"') -or
+        $archiveSha256 -notmatch '^[0-9a-fA-F]{64}$' -or $latestVersion.Contains('"') -or
+        ($sourceCommit -and $sourceCommit -notmatch '^[0-9a-fA-F]{40}$')) {
+        Remove-PendingUpdateArchive $Update
+        [void][System.Windows.Forms.MessageBox]::Show('The approved update identity is invalid. Run the update check again.', 'Update unavailable', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        return
+    }
+    try { [void][version]$latestVersion }
+    catch {
+        Remove-PendingUpdateArchive $Update
+        [void][System.Windows.Forms.MessageBox]::Show('The approved update version is invalid. Run the update check again.', 'Update unavailable', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         return
     }
     $installRoot = Split-Path (Split-Path $PSCommandPath)
     $updateItem.Enabled = $false; $statusItem.Text = 'Starting update...'
-    $arguments = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -ParentProcessId {1} -InstallRoot "{2}" -Repository "CLSMCSMII/codex-usage-tray"' -f $updaterPath, $PID, $installRoot
-    Start-Process powershell.exe -WindowStyle Hidden -ArgumentList $arguments
+    $arguments = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -ParentProcessId {1} -InstallRoot "{2}" -Repository "CLSMCSMII/codex-usage-tray" -SourceArchive "{3}" -ExpectedArchiveSha256 "{4}" -ExpectedVersion "{5}" -DeleteSourceArchive' -f $updaterPath, $PID, $installRoot, $archivePath, $archiveSha256, $latestVersion
+    if ($sourceCommit) { $arguments += ' -SourceCommit "{0}"' -f $sourceCommit }
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = 'powershell.exe'
+    $startInfo.Arguments = $arguments
+    $startInfo.WorkingDirectory = [IO.Path]::GetTempPath()
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) { throw 'Could not start the updater.' }
+    } catch {
+        $process.Dispose()
+        $updateItem.Enabled = $true
+        $statusItem.Text = $script:updatePreviousStatus
+        [void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Update unavailable', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        return
+    }
+    $process.Dispose()
+    $script:pendingUpdate = $null
     $script:notify.Visible = $false
     [System.Windows.Forms.Application]::Exit()
 }
@@ -262,7 +335,7 @@ function Start-SelfUpdate {
 function Start-UpdateCheck {
     if ($script:updateCheckProcess -and -not $script:updateCheckProcess.HasExited) { return }
     $updaterPath = Join-Path (Split-Path $PSCommandPath) 'Updater.ps1'
-    if (-not (Test-Path -LiteralPath $updaterPath)) {
+    if (-not (Test-Path -LiteralPath $updaterPath -PathType Leaf)) {
         [void][System.Windows.Forms.MessageBox]::Show('Updater.ps1 is missing. Reinstall the latest package manually.', 'Update unavailable', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         return
     }
@@ -270,7 +343,7 @@ function Start-UpdateCheck {
     $statusItem.Text = 'Checking for update...'
     $updateItem.Enabled = $false
     $installRoot = Split-Path (Split-Path $PSCommandPath)
-    $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -InstallRoot "{1}" -Repository "CLSMCSMII/codex-usage-tray" -CheckOnly -CurrentVersion "{2}"' -f $updaterPath, $installRoot, $script:AppVersion
+    $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -InstallRoot "{1}" -Repository "CLSMCSMII/codex-usage-tray" -CheckOnly -PersistArchive -CurrentVersion "{2}"' -f $updaterPath, $installRoot, $script:AppVersion
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = 'powershell.exe'
     $startInfo.Arguments = $arguments
@@ -281,6 +354,7 @@ function Start-UpdateCheck {
     $script:updateCheckProcess = [System.Diagnostics.Process]::new()
     $script:updateCheckProcess.StartInfo = $startInfo
     if (-not $script:updateCheckProcess.Start()) { throw 'Could not start the update check.' }
+    $script:updateCheckProcessStartedAt = [DateTime]::Now
 }
 
 function Show-UpToDateWindow {
@@ -316,7 +390,15 @@ function Show-UpToDateWindow {
 }
 
 function Complete-UpdateCheck {
-    if (-not $script:updateCheckProcess -or -not $script:updateCheckProcess.HasExited) { return }
+    if (-not $script:updateCheckProcess) { return }
+    if (-not $script:updateCheckProcess.HasExited) {
+        if (([DateTime]::Now - $script:updateCheckProcessStartedAt).TotalSeconds -le $script:UpdateCheckTimeoutSec) { return }
+        try { $script:updateCheckProcess.Kill(); [void]$script:updateCheckProcess.WaitForExit(5000) } catch {}
+        $script:updateCheckProcess.Dispose(); $script:updateCheckProcess = $null
+        $updateItem.Enabled = $true; $statusItem.Text = $script:updatePreviousStatus
+        [void][System.Windows.Forms.MessageBox]::Show('The update check timed out.', 'Could not check for updates', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        return
+    }
     $output = $script:updateCheckProcess.StandardOutput.ReadToEnd()
     $errorOutput = $script:updateCheckProcess.StandardError.ReadToEnd()
     $exitCode = $script:updateCheckProcess.ExitCode
@@ -329,22 +411,40 @@ function Complete-UpdateCheck {
         [void][System.Windows.Forms.MessageBox]::Show($message, 'Could not check for updates', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         return
     }
-    try { $result = $output | ConvertFrom-Json }
-    catch {
+    $result = $null
+    try {
+        $result = $output | ConvertFrom-Json
+        if ($result.archiveSha256 -notmatch '^[0-9a-fA-F]{64}$') { throw 'Invalid archive identity.' }
+        if ($result.sourceCommit -and [string]$result.sourceCommit -notmatch '^[0-9a-fA-F]{40}$') { throw 'Invalid source commit.' }
+        [void][version]([string]$result.currentVersion)
+        [void][version]([string]$result.latestVersion)
+    } catch {
+        Remove-PendingUpdateArchive $result
         [void][System.Windows.Forms.MessageBox]::Show('GitHub returned an invalid update response.', 'Could not check for updates', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         return
     }
     if (-not $result.updateAvailable) {
+        Remove-PendingUpdateArchive $result
         Show-UpToDateWindow -CurrentVersion ([string]$result.currentVersion) -LatestVersion ([string]$result.latestVersion)
         return
     }
+    if (-not $result.archivePath -or -not (Test-Path -LiteralPath ([string]$result.archivePath) -PathType Leaf)) {
+        [void][System.Windows.Forms.MessageBox]::Show('The checked update archive is missing. Run the update check again.', 'Could not check for updates', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        return
+    }
+    $commitText = if ($result.sourceCommit) { "`r`nSource commit: $(([string]$result.sourceCommit).Substring(0, 12))" } else { '' }
     $choice = [System.Windows.Forms.MessageBox]::Show(
-        "Current version: $($result.currentVersion)`r`nLatest version: $($result.latestVersion)`r`n`r`nDownload and install the update now?",
+        "Current version: $($result.currentVersion)`r`nLatest version: $($result.latestVersion)$commitText`r`n`r`nInstall this exact verified archive now?",
         'Codex Usage Tray update available',
         [System.Windows.Forms.MessageBoxButtons]::YesNo,
         [System.Windows.Forms.MessageBoxIcon]::Information
     )
-    if ($choice -eq [System.Windows.Forms.DialogResult]::Yes) { Start-SelfUpdate }
+    if ($choice -eq [System.Windows.Forms.DialogResult]::Yes) {
+        $script:pendingUpdate = $result
+        Start-SelfUpdate -Update $result
+    } else {
+        Remove-PendingUpdateArchive $result
+    }
 }
 
 function Format-WindowDuration {
@@ -458,6 +558,11 @@ function Set-TrayUsage {
         Show-PendingUpdateResult
     } catch {
         $statusItem.Text = 'Could not read Codex usage'; $windowItem.Text = $_.Exception.Message; $resetItem.Text = ''
+        $newIcon = New-UsageIcon $null
+        $script:notify.Icon = $newIcon
+        if ($script:lastIcon) { $script:lastIcon.Dispose() }
+        $script:lastIcon = $newIcon
+        $script:notify.Text = 'Codex: usage unavailable'
     }
 }
 
@@ -474,11 +579,23 @@ function Start-DetailsRefresh {
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new(); $startInfo.FileName = 'powershell.exe'; $startInfo.Arguments = $arguments
     $startInfo.UseShellExecute = $false; $startInfo.CreateNoWindow = $true; $startInfo.RedirectStandardOutput = $true; $startInfo.RedirectStandardError = $true
     $script:detailsProcess = [System.Diagnostics.Process]::new(); $script:detailsProcess.StartInfo = $startInfo
-    if (-not $script:detailsProcess.Start()) { $script:detailsForm.Tag.Status.Text = 'Could not start the details reader.' }
+    if (-not $script:detailsProcess.Start()) {
+        $script:detailsProcess.Dispose(); $script:detailsProcess = $null
+        $script:detailsForm.Tag.Status.Text = 'Could not start the details reader.'
+        return
+    }
+    $script:detailsProcessStartedAt = [DateTime]::Now
 }
 
 function Complete-DetailsRefresh {
-    if (-not $script:detailsProcess -or -not $script:detailsProcess.HasExited) { return }
+    if (-not $script:detailsProcess) { return }
+    if (-not $script:detailsProcess.HasExited) {
+        if (([DateTime]::Now - $script:detailsProcessStartedAt).TotalSeconds -le $script:ChildProcessTimeoutSec) { return }
+        try { $script:detailsProcess.Kill(); [void]$script:detailsProcess.WaitForExit(5000) } catch {}
+        $script:detailsProcess.Dispose(); $script:detailsProcess = $null
+        if ($script:detailsForm -and -not $script:detailsForm.IsDisposed) { $script:detailsForm.Tag.Status.Text = 'The details request timed out.' }
+        return
+    }
     $output = $script:detailsProcess.StandardOutput.ReadToEnd(); $errorOutput = $script:detailsProcess.StandardError.ReadToEnd(); $exitCode = $script:detailsProcess.ExitCode
     $script:detailsProcess.Dispose(); $script:detailsProcess = $null
     if (-not $script:detailsForm -or $script:detailsForm.IsDisposed) { return }
@@ -501,11 +618,25 @@ function Start-UsageRefresh {
     $startInfo.RedirectStandardError = $true
     $script:refreshProcess = [System.Diagnostics.Process]::new()
     $script:refreshProcess.StartInfo = $startInfo
-    if (-not $script:refreshProcess.Start()) { throw 'Could not start the usage reader.' }
+    if (-not $script:refreshProcess.Start()) {
+        $script:refreshProcess.Dispose(); $script:refreshProcess = $null
+        $refreshItem.Enabled = $true
+        throw 'Could not start the usage reader.'
+    }
+    $script:refreshProcessStartedAt = [DateTime]::Now
 }
 
 function Complete-UsageRefresh {
-    if (-not $script:refreshProcess -or -not $script:refreshProcess.HasExited) { return }
+    if (-not $script:refreshProcess) { return }
+    if (-not $script:refreshProcess.HasExited) {
+        if (([DateTime]::Now - $script:refreshProcessStartedAt).TotalSeconds -le $script:ChildProcessTimeoutSec) { return }
+        try { $script:refreshProcess.Kill(); [void]$script:refreshProcess.WaitForExit(5000) } catch {}
+        $script:refreshProcess.Dispose(); $script:refreshProcess = $null
+        $refreshItem.Enabled = $true
+        $script:nextRefresh = [DateTime]::Now.AddSeconds(60)
+        Set-TrayUsage -Snapshot $null -ErrorMessage 'The usage request timed out.'
+        return
+    }
     $output = $script:refreshProcess.StandardOutput.ReadToEnd()
     $errorOutput = $script:refreshProcess.StandardError.ReadToEnd()
     $exitCode = $script:refreshProcess.ExitCode
@@ -517,14 +648,22 @@ function Complete-UsageRefresh {
         Set-TrayUsage -Snapshot $null -ErrorMessage $(if ($errorOutput) { $errorOutput.Trim() } else { "Usage reader exited with code $exitCode." })
         return
     }
-    $snapshot = if ($output.Trim()) { $output | ConvertFrom-Json } else { $null }
-    Set-TrayUsage -Snapshot $snapshot
+    try {
+        $snapshot = if ($output.Trim()) { $output | ConvertFrom-Json } else { $null }
+        Set-TrayUsage -Snapshot $snapshot
+    } catch {
+        Set-TrayUsage -Snapshot $null -ErrorMessage ('Could not parse usage response: ' + $_.Exception.Message)
+    }
 }
 
 $script:refreshProcess = $null
 $script:detailsProcess = $null
 $script:updateCheckProcess = $null
+$script:refreshProcessStartedAt = [DateTime]::MinValue
+$script:detailsProcessStartedAt = [DateTime]::MinValue
+$script:updateCheckProcessStartedAt = [DateTime]::MinValue
 $script:updatePreviousStatus = ''
+$script:pendingUpdate = $null
 $script:detailsForm = $null
 $script:lastSnapshot = $null
 $script:nextRefresh = [DateTime]::MinValue
@@ -542,11 +681,21 @@ $exitItem.add_Click({
     if ($script:refreshProcess -and -not $script:refreshProcess.HasExited) { $script:refreshProcess.Kill() }
     if ($script:detailsProcess -and -not $script:detailsProcess.HasExited) { $script:detailsProcess.Kill() }
     if ($script:updateCheckProcess -and -not $script:updateCheckProcess.HasExited) { $script:updateCheckProcess.Kill() }
+    Remove-PendingUpdateArchive $script:pendingUpdate
+    Get-ChildItem -LiteralPath $script:installRoot -Filter 'pending-update-*.zip' -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
     if ($script:detailsForm -and -not $script:detailsForm.IsDisposed) { $script:detailsForm.Close() }
     $script:notify.Visible = $false
     [System.Windows.Forms.Application]::Exit()
 })
 
-Start-UsageRefresh
-[System.Windows.Forms.Application]::Run()
-$timer.Dispose(); $menu.Dispose(); $script:notify.Dispose(); if ($script:lastIcon) { $script:lastIcon.Dispose() }
+try {
+    Start-UsageRefresh
+    [System.Windows.Forms.Application]::Run()
+} finally {
+    $timer.Dispose(); $menu.Dispose(); $script:notify.Dispose()
+    if ($script:lastIcon) { $script:lastIcon.Dispose() }
+    if ($script:singleInstanceMutex) {
+        try { $script:singleInstanceMutex.ReleaseMutex() } catch {}
+        $script:singleInstanceMutex.Dispose()
+    }
+}
