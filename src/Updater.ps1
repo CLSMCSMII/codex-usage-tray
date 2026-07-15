@@ -28,7 +28,11 @@ function Write-UpdateResult {
 
 function Start-TrayApp {
     if ($NoRestart) { return }
-    if (Test-Path -LiteralPath $appPath) {
+    $launcherPath = Join-Path $InstallRoot 'Launcher.vbs'
+    if (Test-Path -LiteralPath $launcherPath) {
+        $launcherArgument = '"' + $launcherPath + '"'
+        Start-Process (Join-Path $env:SystemRoot 'System32\wscript.exe') -WindowStyle Hidden -ArgumentList @('//B', '//NoLogo', $launcherArgument)
+    } elseif (Test-Path -LiteralPath $appPath) {
         $arguments = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $appPath
         Start-Process powershell.exe -WindowStyle Hidden -ArgumentList $arguments
     }
@@ -56,7 +60,7 @@ try {
     $sourceRoot = if ($firstDirectory -and (Test-Path -LiteralPath (Join-Path $firstDirectory.FullName 'src\CodexUsageTray.ps1'))) { $firstDirectory.FullName }
         elseif (Test-Path -LiteralPath (Join-Path $extractPath 'src\CodexUsageTray.ps1')) { $extractPath }
         else { throw 'The downloaded archive has no Codex Usage Tray project.' }
-    $required = @('src\CodexUsageTray.ps1', 'src\Updater.ps1', 'Install.ps1', 'Uninstall.ps1', 'README.md', 'LICENSE')
+    $required = @('src\CodexUsageTray.ps1', 'src\Updater.ps1', 'Launcher.vbs', 'Install.ps1', 'Uninstall.ps1', 'README.md', 'LICENSE')
     foreach ($relative in $required) {
         if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot $relative))) { throw "The downloaded update is missing $relative." }
     }

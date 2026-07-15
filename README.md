@@ -11,6 +11,7 @@ ChatGPT Business workspaces are supported. The displayed value is the limit repo
 - Displays the remaining percentage as a large, high-contrast battery level with a number inside the tray icon
 - Opens a left-click details window with every available usage reset and reset-credit expiration date
 - Provides a right-click **Check for update** action that reports whether the app is current and shows both version numbers when an update is available
+- Starts through a windowless launcher so Windows Terminal or PowerShell does not remain open
 - Shows its semantic version in the right-click menu, usage window title, and tooltip
 - Closes the usage and reset-credit window when **Escape** is pressed
 - Shows the usage window and reset time in the context menu
@@ -66,6 +67,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Parser.Tests.ps1
 CodexUsageTray/
   src/CodexUsageTray.ps1   Tray app and usage parser
   src/Updater.ps1          In-place GitHub updater and rollback helper
+  Launcher.vbs             Windowless app launcher
   tests/Parser.Tests.ps1   Parser smoke test with fixture data
   tests/Updater.Tests.ps1  Isolated updater integration test
   Install.ps1              Per-user installer and Startup setup

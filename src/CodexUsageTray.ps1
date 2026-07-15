@@ -1,8 +1,32 @@
-param([switch]$NoUi, [switch]$Json, [switch]$Details, [switch]$LocalOnly, [string]$SessionsPath)
+param([switch]$NoUi, [switch]$Json, [switch]$Details, [switch]$LocalOnly, [switch]$HiddenLaunch, [string]$SessionsPath)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$script:AppVersion = '1.2.2'
+$script:AppVersion = '1.2.3'
+
+$script:installRoot = Split-Path (Split-Path $PSCommandPath)
+$script:launcherPath = Join-Path $script:installRoot 'Launcher.vbs'
+
+function Initialize-HiddenLauncher {
+    if (Test-Path -LiteralPath $script:launcherPath) { return }
+    @'
+Option Explicit
+Dim shell, fileSystem, installRoot, appPath, command
+Set shell = CreateObject("WScript.Shell")
+Set fileSystem = CreateObject("Scripting.FileSystemObject")
+installRoot = fileSystem.GetParentFolderName(WScript.ScriptFullName)
+appPath = fileSystem.BuildPath(installRoot, "src\CodexUsageTray.ps1")
+command = "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File " & Chr(34) & appPath & Chr(34) & " -HiddenLaunch"
+shell.Run command, 0, False
+'@ | Set-Content -LiteralPath $script:launcherPath -Encoding ASCII
+}
+
+if (-not $NoUi -and -not $HiddenLaunch) {
+    Initialize-HiddenLauncher
+    $launcherArgument = '"' + $script:launcherPath + '"'
+    Start-Process (Join-Path $env:SystemRoot 'System32\wscript.exe') -WindowStyle Hidden -ArgumentList @('//B', '//NoLogo', $launcherArgument)
+    return
+}
 
 function Get-CodexSessionsPath {
     param([string]$Override)
@@ -393,15 +417,21 @@ function Update-DetailsWindow {
 }
 
 $startupShortcut = Join-Path ([Environment]::GetFolderPath('Startup')) 'Codex Usage Tray.lnk'
+function Set-StartupShortcut {
+    Initialize-HiddenLauncher
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut($startupShortcut)
+    $shortcut.TargetPath = Join-Path $env:SystemRoot 'System32\wscript.exe'
+    $shortcut.Arguments = '//B //NoLogo "' + $script:launcherPath + '"'
+    $shortcut.WorkingDirectory = $script:installRoot
+    $shortcut.Description = 'Codex usage indicator'
+    $shortcut.Save()
+}
 $startupItem.Checked = [bool](Test-Path -LiteralPath $startupShortcut)
+if ($startupItem.Checked) { Set-StartupShortcut }
 $startupItem.add_Click({
     if ($startupItem.Checked) {
-        $shell = New-Object -ComObject WScript.Shell
-        $shortcut = $shell.CreateShortcut($startupShortcut)
-        $shortcut.TargetPath = 'powershell.exe'
-        $shortcut.Arguments = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $PSCommandPath + '"'
-        $shortcut.WorkingDirectory = Split-Path $PSCommandPath
-        $shortcut.Save()
+        Set-StartupShortcut
     } else { Remove-Item -LiteralPath $startupShortcut -Force -ErrorAction SilentlyContinue }
 })
 
