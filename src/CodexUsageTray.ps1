@@ -306,8 +306,9 @@ function Start-SelfUpdate {
         return
     }
     $installRoot = Split-Path (Split-Path $PSCommandPath)
+    $parentStartTicks = [System.Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime().Ticks
     $updateItem.Enabled = $false; $statusItem.Text = 'Starting update...'
-    $arguments = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -ParentProcessId {1} -InstallRoot "{2}" -Repository "CLSMCSMII/codex-usage-tray" -SourceArchive "{3}" -ExpectedArchiveSha256 "{4}" -ExpectedVersion "{5}" -DeleteSourceArchive' -f $updaterPath, $PID, $installRoot, $archivePath, $archiveSha256, $latestVersion
+    $arguments = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -ParentProcessId {1} -ParentProcessStartTimeUtcTicks {2} -InstallRoot "{3}" -Repository "CLSMCSMII/codex-usage-tray" -SourceArchive "{4}" -ExpectedArchiveSha256 "{5}" -ExpectedVersion "{6}" -DeleteSourceArchive' -f $updaterPath, $PID, $parentStartTicks, $installRoot, $archivePath, $archiveSha256, $latestVersion
     if ($sourceCommit) { $arguments += ' -SourceCommit "{0}"' -f $sourceCommit }
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = 'powershell.exe'

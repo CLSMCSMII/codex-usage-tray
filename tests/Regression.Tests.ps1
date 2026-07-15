@@ -91,6 +91,7 @@ try {
     Assert-Matches $appText 'TimeoutSec' 'Live usage requests have no explicit timeout.'
     Assert-Matches $appText 'refreshProcessStartedAt' 'Background refreshes have no overall watchdog.'
     Assert-Matches $updaterText 'ExpectedArchiveSha256' 'The updater does not bind installation to the archive approved during the check.'
+    Assert-Matches $updaterText 'ParentProcessStartTimeUtcTicks' 'The updater identifies its parent only by a reusable numeric PID.'
     Assert-Matches $updaterText 'pending-update-' 'The update check does not preserve the exact approved archive.'
     Assert-Matches $updaterText 'previous-install' 'The updater does not retain a full-installation rollback copy.'
     Assert-Matches $updaterText 'if \(\$CheckOnly -or \$ValidateOnly\)' 'Check-only failures can still execute the tray restart path.'

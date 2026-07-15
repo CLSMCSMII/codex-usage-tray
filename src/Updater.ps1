@@ -1,5 +1,6 @@
 param(
     [int]$ParentProcessId,
+    [long]$ParentProcessStartTimeUtcTicks,
     [Parameter(Mandatory)][string]$InstallRoot,
     [string]$Repository = 'CLSMCSMII/codex-usage-tray',
     [string]$SourceArchive,
@@ -43,8 +44,14 @@ $parentProcess = $null
 # Capture a handle while the parent is still expected to exist. Reusing the numeric PID later could target an unrelated process.
 if ($ParentProcessId -gt 0) {
     try {
-        $parentProcess = [System.Diagnostics.Process]::GetProcessById($ParentProcessId)
-        [void]$parentProcess.Handle
+        $candidateParent = [System.Diagnostics.Process]::GetProcessById($ParentProcessId)
+        $candidateStartTicks = $candidateParent.StartTime.ToUniversalTime().Ticks
+        if ($ParentProcessStartTimeUtcTicks -le 0 -or $candidateStartTicks -ne $ParentProcessStartTimeUtcTicks) {
+            $candidateParent.Dispose()
+        } else {
+            [void]$candidateParent.Handle
+            $parentProcess = $candidateParent
+        }
     } catch {
         $parentProcess = $null
     }
