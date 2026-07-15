@@ -13,7 +13,8 @@ param(
     [switch]$DeleteSourceArchive,
     [switch]$ValidateOnly,
     [switch]$NoRestart,
-    [ValidateRange(10, 600)][int]$HttpTimeoutSec = 120
+    [ValidateRange(10, 600)][int]$HttpTimeoutSec = 120,
+    [ValidateRange(1, 300)][int]$MutexTimeoutSec = 180
 )
 
 Set-StrictMode -Version Latest
@@ -39,6 +40,7 @@ $updateMutexHeld = $false
 $previousInstallMoved = $false
 $newInstallMoved = $false
 $updateSucceeded = $false
+$transactionStarted = $false
 $parentProcess = $null
 
 # Capture a handle while the parent is still expected to exist. Reusing the numeric PID later could target an unrelated process.
@@ -154,9 +156,10 @@ function Wait-ForCapturedParent {
 New-Item -ItemType Directory -Path $tempRoot, $extractPath -Force | Out-Null
 try {
     $updateMutex = [System.Threading.Mutex]::new($false, 'CLSMCSMII.CodexUsageTray.Update')
-    try { $updateMutexHeld = $updateMutex.WaitOne([TimeSpan]::FromMinutes(3)) }
+    try { $updateMutexHeld = $updateMutex.WaitOne([TimeSpan]::FromSeconds($MutexTimeoutSec)) }
     catch [System.Threading.AbandonedMutexException] { $updateMutexHeld = $true }
     if (-not $updateMutexHeld) { throw 'Another install, update, or uninstall operation is still running.' }
+    $transactionStarted = $true
 
     if ($SourceArchive) {
         Copy-Item -LiteralPath $SourceArchive -Destination $archivePath -Force
@@ -216,6 +219,13 @@ try {
     if (-not $ExpectedArchiveSha256) { throw 'Apply mode requires ExpectedArchiveSha256 from the update check.' }
     if (-not $ExpectedVersion) { throw 'Apply mode requires ExpectedVersion from the update check.' }
 
+    if (Test-Path -LiteralPath $appPath -PathType Leaf) {
+        $installedVersion = Get-SourceVersion -SourceRoot $InstallRoot
+        if ($latestVersion -lt $installedVersion) {
+            throw "Refusing to downgrade installed version '$installedVersion' to stale approved version '$latestVersion'."
+        }
+    }
+
     Copy-ProjectToStage -SourceRoot $sourceRoot
     Wait-ForCapturedParent
 
@@ -230,7 +240,7 @@ try {
     Start-TrayApp
     $updateSucceeded = $true
 } catch {
-    if ($CheckOnly -or $ValidateOnly) { throw }
+    if ($CheckOnly -or $ValidateOnly -or -not $transactionStarted) { throw }
     $failureMessage = 'Update failed: ' + $_.Exception.Message
     try {
         if ($newInstallMoved -and (Test-Path -LiteralPath $InstallRoot)) {

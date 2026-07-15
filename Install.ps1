@@ -13,6 +13,7 @@ $updateMutexHeld = $false
 $oldInstallMoved = $false
 $newInstallMoved = $false
 $installationSucceeded = $false
+$oldInstallWasRunning = $false
 $shortcutExisted = Test-Path -LiteralPath $startup -PathType Leaf
 
 function Assert-SourcePackage {
@@ -56,16 +57,24 @@ function Stop-InstalledProcesses {
         (Join-Path $target 'src\CodexUsageTray.ps1'),
         (Join-Path $target 'src\Updater.ps1')
     )
-    foreach ($process in @(Get-ExactScriptProcesses -ScriptPaths $paths)) {
+    $processes = @(Get-ExactScriptProcesses -ScriptPaths $paths)
+    $hadRunningProcess = $processes.Count -gt 0
+    foreach ($process in $processes) {
         Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
     }
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     do {
         $remaining = @(Get-ExactScriptProcesses -ScriptPaths $paths)
-        if ($remaining.Count -eq 0) { return }
+        if ($remaining.Count -eq 0) { return $hadRunningProcess }
         Start-Sleep -Milliseconds 200
     } while ([DateTime]::UtcNow -lt $deadline)
     throw 'One or more existing Codex Usage Tray processes could not be stopped.'
+}
+
+function Start-InstalledTray {
+    $launcher = Join-Path $target 'Launcher.vbs'
+    $launcherArgument = '"' + $launcher + '"'
+    Start-Process (Join-Path $env:SystemRoot 'System32\wscript.exe') -WindowStyle Hidden -ArgumentList @('//B', '//NoLogo', $launcherArgument)
 }
 
 function Set-StartupShortcut {
@@ -89,7 +98,7 @@ try {
     catch [System.Threading.AbandonedMutexException] { $updateMutexHeld = $true }
     if (-not $updateMutexHeld) { throw 'Another install, update, or uninstall operation is still running.' }
 
-    Stop-InstalledProcesses
+    $oldInstallWasRunning = [bool](Stop-InstalledProcesses)
     if (Test-Path -LiteralPath $target) {
         Move-Item -LiteralPath $target -Destination $previousInstall
         $oldInstallMoved = $true
@@ -98,9 +107,7 @@ try {
     $newInstallMoved = $true
     Set-StartupShortcut
 
-    $launcher = Join-Path $target 'Launcher.vbs'
-    $launcherArgument = '"' + $launcher + '"'
-    Start-Process (Join-Path $env:SystemRoot 'System32\wscript.exe') -WindowStyle Hidden -ArgumentList @('//B', '//NoLogo', $launcherArgument)
+    Start-InstalledTray
     $installationSucceeded = $true
     Write-Host "Installed Codex Usage Tray to $target"
 } catch {
@@ -119,6 +126,7 @@ try {
         } elseif (-not $shortcutExisted -and (Test-Path -LiteralPath $startup)) {
             Remove-Item -LiteralPath $startup -Force -ErrorAction Stop
         }
+        if ($oldInstallWasRunning) { Start-InstalledTray }
     } catch {
         throw "Installation failed: $failure Rollback also failed: $($_.Exception.Message)"
     }

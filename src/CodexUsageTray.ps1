@@ -93,7 +93,6 @@ function Get-LatestCodexUsage {
                 if ($snapshot -and ($null -eq $latestSnapshot -or $snapshot.Timestamp -gt $latestSnapshot.Timestamp)) {
                     $latestSnapshot = $snapshot
                 }
-                if ($snapshot) { break }
             } catch { continue }
         }
     }
