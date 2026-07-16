@@ -2,7 +2,7 @@ param([switch]$NoUi, [switch]$Json, [switch]$Details, [switch]$LocalOnly, [switc
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$script:AppVersion = '1.4.0'
+$script:AppVersion = '1.4.1'
 $script:ApiTimeoutSec = 20
 $script:ChildProcessTimeoutSec = 45
 $script:UpdateCheckTimeoutSec = 180
@@ -432,9 +432,17 @@ function Refresh-AccountMenu {
 }
 
 function Get-CodexExecutable {
+    $candidates = @((Join-Path $env:LOCALAPPDATA 'Programs\OpenAI\Codex\bin\codex.exe'))
     foreach ($name in @('codex.exe', 'codex')) {
         $command = Get-Command $name -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($command -and $command.Source -and (Test-Path -LiteralPath $command.Source -PathType Leaf)) { return [string]$command.Source }
+        if ($command -and $command.Source) { $candidates += [string]$command.Source }
+    }
+    $windowsAppsPrefix = (Join-Path $env:ProgramFiles 'WindowsApps').TrimEnd('\') + '\'
+    foreach ($candidate in @($candidates | Select-Object -Unique)) {
+        if (-not $candidate) { continue }
+        try { $fullPath = [IO.Path]::GetFullPath($candidate) } catch { continue }
+        if ($fullPath.StartsWith($windowsAppsPrefix, [StringComparison]::OrdinalIgnoreCase)) { continue }
+        if (Test-Path -LiteralPath $fullPath -PathType Leaf) { return $fullPath }
     }
     return $null
 }
@@ -446,7 +454,13 @@ function Start-AddAccountLogin {
     }
     $codexExecutable = Get-CodexExecutable
     if (-not $codexExecutable) {
-        [void][System.Windows.Forms.MessageBox]::Show('The Codex command could not be found. Install or open ChatGPT/Codex, then try again.', 'Cannot add account', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        $installChoice = [System.Windows.Forms.MessageBox]::Show(
+            "Adding another account requires the standalone Codex CLI. The copy bundled inside the ChatGPT app is protected by Windows and cannot start a separate login.`r`n`r`nOpen the official Codex CLI installation instructions?",
+            'Standalone Codex CLI required',
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        )
+        if ($installChoice -eq [System.Windows.Forms.DialogResult]::Yes) { Start-Process 'https://learn.chatgpt.com/docs/codex/cli' }
         return
     }
     $choice = [System.Windows.Forms.MessageBox]::Show('Your browser will open for ChatGPT sign-in. Sign in with the account you want to add, then return to the tray app.', 'Add ChatGPT account', [System.Windows.Forms.MessageBoxButtons]::OKCancel, [System.Windows.Forms.MessageBoxIcon]::Information)
@@ -471,7 +485,7 @@ function Start-AddAccountLogin {
     } catch {
         $script:accountLoginProcess.Dispose(); $script:accountLoginProcess = $null
         Remove-Item -LiteralPath $profileHome -Recurse -Force -ErrorAction SilentlyContinue
-        [void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Cannot add account', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        [void][System.Windows.Forms.MessageBox]::Show('The standalone Codex sign-in could not start. Reinstall the Codex CLI or restart Windows, then try again.', 'Cannot add account', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
     }
 }
 

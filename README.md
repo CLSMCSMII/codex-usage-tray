@@ -1,6 +1,6 @@
 # Codex Usage Tray for Windows
 
-Current version: **1.4.0**
+Current version: **1.4.1**
 
 A lightweight Windows system tray app that reads the latest usage percentage from local Codex session files in read-only mode and displays the remaining quota as a battery icon next to the clock.
 
@@ -30,7 +30,7 @@ ChatGPT Business workspaces are supported. The displayed value is the limit repo
 - Windows 10 or Windows 11
 - Windows PowerShell 5.1, included with Windows
 - Codex signed in and used at least once on the computer
-- The `codex` command available when adding another account through the tray menu
+- The standalone Codex CLI installed when adding another account through the tray menu. The `codex.exe` bundled inside the Microsoft Store ChatGPT app is protected by Windows and cannot be launched directly for a separate login.
 
 ## Installation
 
@@ -100,6 +100,8 @@ The app reads the existing Codex access token from `%CODEX_HOME%\auth.json` or `
 ## Multiple ChatGPT accounts
 
 Right-click the tray icon and select the username at the top of the menu. Choose an existing account to display its quota, or choose **Add account...** and complete ChatGPT sign-in in the browser. The selected username remains above the **Refreshing...** or remaining-usage row.
+
+If only the Microsoft Store ChatGPT app is installed, **Add account...** offers to open the official standalone Codex CLI installation instructions. After installing the standalone CLI, choose **Add account...** again.
 
 Codex exposes one active cached login per `CODEX_HOME`, so each additional account is signed into a separate profile under `%LOCALAPPDATA%\CodexUsageTrayAccounts`. The tray app stores only the selected profile path in `%LOCALAPPDATA%\CodexUsageTrayData\settings.json`; it does not copy tokens or identity data into that settings file. Each profile's `auth.json` is created and managed by the Codex login command and must be protected like a password. App updates and uninstalling the tray app do not delete these account profiles.
 

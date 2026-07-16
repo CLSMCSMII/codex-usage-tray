@@ -103,6 +103,8 @@ try {
     Assert-Matches $appText 'Local\\CLSMCSMII\.CodexUsageTray' 'The tray application has no per-session single-instance mutex.'
     Assert-Matches $appText 'TimeoutSec' 'Live usage requests have no explicit timeout.'
     Assert-Matches $appText 'refreshProcessStartedAt' 'Background refreshes have no overall watchdog.'
+    Assert-Matches $appText 'Programs\\OpenAI\\Codex\\bin\\codex\.exe' 'Additional-account sign-in does not prefer the standalone Codex CLI.'
+    Assert-Matches $appText 'WindowsApps' 'Additional-account sign-in can still attempt to execute the protected Microsoft Store binary.'
     Assert-Matches $updaterText 'ExpectedArchiveSha256' 'The updater does not bind installation to the archive approved during the check.'
     Assert-Matches $updaterText 'ParentProcessStartTimeUtcTicks' 'The updater identifies its parent only by a reusable numeric PID.'
     Assert-Matches $updaterText 'transactionStarted' 'The updater has no guard preventing rollback actions before it owns the update mutex.'

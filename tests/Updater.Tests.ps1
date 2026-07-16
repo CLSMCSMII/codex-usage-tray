@@ -10,9 +10,9 @@ New-Item -ItemType Directory -Path $testRoot, $installRoot -Force | Out-Null
 try {
     Compress-Archive -Path (Join-Path $projectRoot '*') -DestinationPath $archivePath -CompressionLevel Fastest
 
-    $available = & $updater -InstallRoot $installRoot -SourceArchive $archivePath -CheckOnly -PersistArchive -CurrentVersion '1.3.0' | ConvertFrom-Json
-    if (-not $available.updateAvailable -or $available.currentVersion -ne '1.3.0' -or $available.latestVersion -ne '1.4.0') {
-        throw 'Update check did not identify version 1.4.0 as newer than 1.3.0.'
+    $available = & $updater -InstallRoot $installRoot -SourceArchive $archivePath -CheckOnly -PersistArchive -CurrentVersion '1.4.0' | ConvertFrom-Json
+    if (-not $available.updateAvailable -or $available.currentVersion -ne '1.4.0' -or $available.latestVersion -ne '1.4.1') {
+        throw 'Update check did not identify version 1.4.1 as newer than 1.4.0.'
     }
     if ([string]$available.archiveSha256 -notmatch '^[0-9a-f]{64}$') { throw 'Update check returned no valid archive SHA-256.' }
     if (-not (Test-Path -LiteralPath ([string]$available.archivePath) -PathType Leaf)) { throw 'Update check did not persist the exact approved archive.' }
@@ -48,7 +48,7 @@ try {
         $blockedArchiveHash = (Get-FileHash -LiteralPath $blockedArchive -Algorithm SHA256).Hash
         $mutexRejected = $false
         try {
-            & $updater -InstallRoot $blockedRoot -SourceArchive $blockedArchive -ExpectedArchiveSha256 ([string]$available.archiveSha256) -ExpectedVersion '1.4.0' -DeleteSourceArchive -MutexTimeoutSec 1 -NoRestart
+            & $updater -InstallRoot $blockedRoot -SourceArchive $blockedArchive -ExpectedArchiveSha256 ([string]$available.archiveSha256) -ExpectedVersion '1.4.1' -DeleteSourceArchive -MutexTimeoutSec 1 -NoRestart
         } catch { $mutexRejected = $_.Exception.Message -match 'still running' }
         if (-not $mutexRejected) { throw 'Updater did not reject apply mode while another transaction owned the mutex.' }
         if (-not (Test-Path -LiteralPath $blockedArchive -PathType Leaf)) { throw 'Updater deleted the pending archive without owning the update mutex.' }
@@ -60,13 +60,13 @@ try {
         $lockProcess.Dispose()
     }
 
-    $current = & $updater -InstallRoot $installRoot -SourceArchive $archivePath -CheckOnly -CurrentVersion '1.4.0' | ConvertFrom-Json
+    $current = & $updater -InstallRoot $installRoot -SourceArchive $archivePath -CheckOnly -CurrentVersion '1.4.1' | ConvertFrom-Json
     if ($current.updateAvailable) { throw 'Update check incorrectly reported an update for the current version.' }
 
     [IO.File]::WriteAllText((Join-Path $installRoot 'existing-marker.txt'), 'old-installation')
     $badHashFailed = $false
     try {
-        & $updater -InstallRoot $installRoot -SourceArchive $archivePath -ExpectedArchiveSha256 ('0' * 64) -ExpectedVersion '1.4.0' -NoRestart
+        & $updater -InstallRoot $installRoot -SourceArchive $archivePath -ExpectedArchiveSha256 ('0' * 64) -ExpectedVersion '1.4.1' -NoRestart
     } catch { $badHashFailed = $true }
     if (-not $badHashFailed) { throw 'Updater accepted an archive whose SHA-256 differed from the approved hash.' }
     if ((Get-Content -Raw -LiteralPath (Join-Path $installRoot 'existing-marker.txt')) -ne 'old-installation') {
@@ -86,12 +86,12 @@ try {
     Write-Host 'PASS: updater atomically replaces a test installation from the approved archive.' -ForegroundColor Green
 
     $installedApp = Join-Path $installRoot 'src\CodexUsageTray.ps1'
-    $newerAppText = (Get-Content -Raw -LiteralPath $installedApp) -replace '\$script:AppVersion\s*=\s*''1\.4\.0''', '$script:AppVersion = ''1.5.0'''
+    $newerAppText = (Get-Content -Raw -LiteralPath $installedApp) -replace '\$script:AppVersion\s*=\s*''1\.4\.1''', '$script:AppVersion = ''1.5.0'''
     Set-Content -LiteralPath $installedApp -Value $newerAppText -Encoding UTF8
     $newerAppHash = (Get-FileHash -LiteralPath $installedApp -Algorithm SHA256).Hash
     $downgradeRejected = $false
     try {
-        & $updater -InstallRoot $installRoot -SourceArchive $archivePath -ExpectedArchiveSha256 ([string]$available.archiveSha256) -ExpectedVersion '1.4.0' -NoRestart
+        & $updater -InstallRoot $installRoot -SourceArchive $archivePath -ExpectedArchiveSha256 ([string]$available.archiveSha256) -ExpectedVersion '1.4.1' -NoRestart
     } catch { $downgradeRejected = $_.Exception.Message -match 'Refusing to downgrade' }
     if (-not $downgradeRejected) { throw 'Updater accepted a stale approved archive that would downgrade a newer installation.' }
     if ((Get-FileHash -LiteralPath $installedApp -Algorithm SHA256).Hash -ne $newerAppHash) { throw 'Downgrade rejection modified the newer installed application.' }
@@ -117,7 +117,7 @@ try {
     }
     $rollbackFailedAsExpected = $false
     try {
-        . $updater -InstallRoot $installRoot -SourceArchive $archivePath -ExpectedArchiveSha256 ([string]$available.archiveSha256) -ExpectedVersion '1.4.0' -NoRestart
+        . $updater -InstallRoot $installRoot -SourceArchive $archivePath -ExpectedArchiveSha256 ([string]$available.archiveSha256) -ExpectedVersion '1.4.1' -NoRestart
     } catch {
         if ($_.Exception.Message -match 'Injected staged-install move failure') { $rollbackFailedAsExpected = $true }
     } finally {
@@ -135,7 +135,7 @@ try {
     $invalidArchive = Join-Path $testRoot 'invalid.zip'
     [IO.File]::WriteAllText($invalidArchive, 'not a zip archive')
     $checkFailure = $false
-    try { & $updater -InstallRoot $installRoot -SourceArchive $invalidArchive -CheckOnly -CurrentVersion '1.4.0' }
+    try { & $updater -InstallRoot $installRoot -SourceArchive $invalidArchive -CheckOnly -CurrentVersion '1.4.1' }
     catch { $checkFailure = $true }
     if (-not $checkFailure) { throw 'Invalid check-only archive unexpectedly succeeded.' }
     $postFailureResult = Get-Content -Raw -LiteralPath (Join-Path $installRoot 'update-result.json') | ConvertFrom-Json
