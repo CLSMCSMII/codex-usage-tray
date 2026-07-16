@@ -1,6 +1,6 @@
 # Codex Usage Tray for Windows
 
-Current version: **1.4.1**
+Current version: **1.4.2**
 
 A lightweight Windows system tray app that reads the latest usage percentage from local Codex session files in read-only mode and displays the remaining quota as a battery icon next to the clock.
 
@@ -9,7 +9,7 @@ ChatGPT Business workspaces are supported. The displayed value is the limit repo
 ## Features
 
 - Displays the remaining percentage as a large, high-contrast battery level with a number inside the tray icon
-- Shows the selected ChatGPT username at the top of the right-click menu and switches quota independently between saved account profiles
+- Shows the selected ChatGPT email and plan at the top of the right-click menu, such as `user@example.com (Business)`, and switches quota independently between saved account profiles
 - Opens a left-click details window with every available usage reset and reset-credit expiration date
 - Provides a right-click **Check for update** action that reports whether the app is current and shows both version numbers when an update is available
 - Starts through a windowless launcher so Windows Terminal or PowerShell does not remain open
@@ -99,7 +99,7 @@ The app reads the existing Codex access token from `%CODEX_HOME%\auth.json` or `
 
 ## Multiple ChatGPT accounts
 
-Right-click the tray icon and select the username at the top of the menu. Choose an existing account to display its quota, or choose **Add account...** and complete ChatGPT sign-in in the browser. The selected username remains above the **Refreshing...** or remaining-usage row.
+Right-click the tray icon and select the email and plan at the top of the menu. Choose an existing account to display its quota, or choose **Add account...** and complete ChatGPT sign-in in the browser. The selected account remains above the **Refreshing...** or remaining-usage row. Personal plans are shown as Free, Plus, or Pro; the `team` plan identifier is shown as Business.
 
 If only the Microsoft Store ChatGPT app is installed, **Add account...** offers to open the official standalone Codex CLI installation instructions. After installing the standalone CLI, choose **Add account...** again.
 

@@ -12,10 +12,17 @@ function ConvertTo-Base64Url {
 }
 
 function New-FakeAuthFile {
-    param([string]$HomePath, [string]$Name, [string]$Email, [string]$AccountId)
+    param([string]$HomePath, [string]$Name, [string]$Email, [string]$AccountId, [string]$PlanType)
     New-Item -ItemType Directory -Path $HomePath -Force | Out-Null
     $header = ConvertTo-Base64Url '{"alg":"none","typ":"JWT"}'
-    $payload = ConvertTo-Base64Url ([pscustomobject]@{ name = $Name; email = $Email } | ConvertTo-Json -Compress)
+    $payload = ConvertTo-Base64Url ([pscustomobject]@{
+        name = $Name
+        email = $Email
+        'https://api.openai.com/auth' = [pscustomobject]@{
+            chatgpt_account_id = $AccountId
+            chatgpt_plan_type = $PlanType
+        }
+    } | ConvertTo-Json -Depth 4 -Compress)
     [pscustomobject]@{
         auth_mode = 'chatgpt'
         tokens = [pscustomobject]@{
@@ -29,17 +36,19 @@ function New-FakeAuthFile {
 
 New-Item -ItemType Directory -Path $tempRoot, $profilesRoot, $sessions -Force | Out-Null
 try {
-    New-FakeAuthFile -HomePath $defaultHome -Name 'Primary User' -Email 'primary@example.test' -AccountId 'account-primary'
-    New-FakeAuthFile -HomePath (Join-Path $profilesRoot 'duplicate') -Name 'Duplicate User' -Email 'duplicate@example.test' -AccountId 'account-primary'
+    New-FakeAuthFile -HomePath $defaultHome -Name 'Primary User' -Email 'primary@example.test' -AccountId 'account-primary' -PlanType 'team'
+    New-FakeAuthFile -HomePath (Join-Path $profilesRoot 'duplicate') -Name 'Duplicate User' -Email 'duplicate@example.test' -AccountId 'account-primary' -PlanType 'team'
     $secondHome = Join-Path $profilesRoot 'second'
-    New-FakeAuthFile -HomePath $secondHome -Name 'Second User' -Email 'second@example.test' -AccountId 'account-second'
+    New-FakeAuthFile -HomePath $secondHome -Name 'Second User' -Email 'second@example.test' -AccountId 'account-second' -PlanType 'pro'
 
     . $app -NoUi -LocalOnly -SessionsPath $sessions
     $profiles = @(Get-CodexAccountProfiles -DefaultHome $defaultHome -ProfilesRoot $profilesRoot)
     if ($profiles.Count -ne 2) { throw "Expected two unique account profiles, found $($profiles.Count)." }
     if ($profiles[0].DisplayName -ne 'Primary User' -or -not $profiles[0].IsDefault) { throw 'The default account was not listed first.' }
-    if (-not ($profiles | Where-Object { $_.DisplayName -eq 'Second User' -and $_.Email -eq 'second@example.test' })) { throw 'The second account identity was not decoded from its local ID token.' }
-    Write-Host 'PASS: account profiles are labeled and deduplicated without exposing tokens.' -ForegroundColor Green
+    if ($profiles[0].MenuLabel -ne 'primary@example.test (Business)') { throw "Unexpected Business account label: $($profiles[0].MenuLabel)" }
+    if (-not ($profiles | Where-Object { $_.Email -eq 'second@example.test' -and $_.MenuLabel -eq 'second@example.test (Pro)' })) { throw 'The second account email and plan were not decoded from its local ID token.' }
+    if ((Get-CodexPlanDisplayName 'free') -ne 'Free' -or (Get-CodexPlanDisplayName 'plus') -ne 'Plus') { throw 'Known plan names are not formatted correctly.' }
+    Write-Host 'PASS: account profiles show email and plan, map team to Business, and deduplicate without exposing tokens.' -ForegroundColor Green
 
     $testSettingsPath = Join-Path $tempRoot 'settings\settings.json'
     Save-SelectedCodexHome -HomePath $secondHome -Path $testSettingsPath

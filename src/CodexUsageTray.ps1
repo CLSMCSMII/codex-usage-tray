@@ -2,7 +2,7 @@ param([switch]$NoUi, [switch]$Json, [switch]$Details, [switch]$LocalOnly, [switc
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$script:AppVersion = '1.4.1'
+$script:AppVersion = '1.4.2'
 $script:ApiTimeoutSec = 20
 $script:ChildProcessTimeoutSec = 45
 $script:UpdateCheckTimeoutSec = 180
@@ -67,6 +67,24 @@ function ConvertFrom-JwtPayload {
     } catch { return $null }
 }
 
+function Get-CodexPlanDisplayName {
+    param([string]$PlanType)
+    $normalized = ([string]$PlanType).Trim().ToLowerInvariant()
+    switch ($normalized) {
+        'team' { return 'Business' }
+        'business' { return 'Business' }
+        'enterprise' { return 'Enterprise' }
+        'edu' { return 'Edu' }
+        'pro' { return 'Pro' }
+        'plus' { return 'Plus' }
+        'free' { return 'Free' }
+        '' { return '' }
+        default {
+            return [Globalization.CultureInfo]::InvariantCulture.TextInfo.ToTitleCase(($normalized -replace '[_-]+', ' '))
+        }
+    }
+}
+
 function Get-CodexAccountProfile {
     param([Parameter(Mandatory)][string]$HomePath, [bool]$IsDefault = $false)
     try { $fullHome = [IO.Path]::GetFullPath($HomePath) } catch { return $null }
@@ -80,18 +98,31 @@ function Get-CodexAccountProfile {
         $displayName = ($displayName -replace '[\x00-\x1F]', ' ').Trim()
         if ($displayName.Length -gt 60) { $displayName = $displayName.Substring(0, 60) }
         $email = if ($claims -and $claims.email) { ([string]$claims.email -replace '[\x00-\x1F]', ' ').Trim() } else { '' }
-        $accountId = if ($auth.tokens.account_id) { [string]$auth.tokens.account_id } else { '' }
-        if (-not $accountId -and $claims) {
+        $authClaims = $null
+        if ($claims) {
             $authClaimProperty = $claims.PSObject.Properties['https://api.openai.com/auth']
-            if ($authClaimProperty -and $authClaimProperty.Value) {
-                $accountProperty = $authClaimProperty.Value.PSObject.Properties['chatgpt_account_id']
-                if ($accountProperty) { $accountId = [string]$accountProperty.Value }
-            }
+            if ($authClaimProperty) { $authClaims = $authClaimProperty.Value }
         }
+        $accountId = if ($auth.tokens.account_id) { [string]$auth.tokens.account_id } else { '' }
+        if (-not $accountId -and $authClaims) {
+            $accountProperty = $authClaims.PSObject.Properties['chatgpt_account_id']
+            if ($accountProperty) { $accountId = [string]$accountProperty.Value }
+        }
+        $planType = ''
+        if ($authClaims) {
+            $planProperty = $authClaims.PSObject.Properties['chatgpt_plan_type']
+            if ($planProperty) { $planType = ([string]$planProperty.Value -replace '[\x00-\x1F]', ' ').Trim() }
+        }
+        $planDisplayName = Get-CodexPlanDisplayName $planType
+        $identityLabel = if ($email) { $email } else { $displayName }
+        $menuLabel = if ($planDisplayName) { '{0} ({1})' -f $identityLabel, $planDisplayName } else { $identityLabel }
         [pscustomobject]@{
             DisplayName = $displayName
             Email = $email
             AccountId = $accountId
+            PlanType = $planType
+            PlanDisplayName = $planDisplayName
+            MenuLabel = $menuLabel
             CodexHome = $fullHome
             IsDefault = $IsDefault
         }
@@ -115,7 +146,7 @@ function Get-CodexAccountProfiles {
         if ($seen.ContainsKey($key)) { return $false }
         $seen[$key] = $true
         return $true
-    } | Sort-Object @{ Expression = { -not $_.IsDefault } }, DisplayName, Email)
+    } | Sort-Object @{ Expression = { -not $_.IsDefault } }, Email, PlanDisplayName, DisplayName)
 }
 
 function Read-SelectedCodexHome {
@@ -341,7 +372,7 @@ if ($requestedCodexHome) {
 if (-not $script:selectedAccount -and $script:accountProfiles.Count -gt 0) { $script:selectedAccount = $script:accountProfiles[0] }
 $script:selectedCodexHome = if ($script:selectedAccount) { [string]$script:selectedAccount.CodexHome } else { $script:defaultCodexHome }
 $menu = [System.Windows.Forms.ContextMenuStrip]::new()
-$accountItem = $menu.Items.Add($(if ($script:selectedAccount) { [string]$script:selectedAccount.DisplayName } else { 'No signed-in account' }))
+$accountItem = $menu.Items.Add($(if ($script:selectedAccount) { [string]$script:selectedAccount.MenuLabel } else { 'No signed-in account' }))
 $statusItem = $menu.Items.Add('Loading Codex usage...'); $statusItem.Enabled = $false
 $windowItem = $menu.Items.Add(''); $windowItem.Enabled = $false
 $resetItem = $menu.Items.Add(''); $resetItem.Enabled = $false
@@ -392,7 +423,8 @@ function Select-CodexAccount {
     $script:notify.Icon = $pendingIcon
     if ($script:lastIcon) { $script:lastIcon.Dispose() }
     $script:lastIcon = $pendingIcon
-    $script:notify.Text = ('Codex: refreshing {0}' -f $script:selectedAccount.DisplayName).Substring(0, [Math]::Min(63, ('Codex: refreshing {0}' -f $script:selectedAccount.DisplayName).Length))
+    $refreshTooltip = 'Codex: refreshing {0}' -f $script:selectedAccount.MenuLabel
+    $script:notify.Text = $refreshTooltip.Substring(0, [Math]::Min(63, $refreshTooltip.Length))
     Start-UsageRefresh
     if ($script:detailsForm -and -not $script:detailsForm.IsDisposed) { Start-DetailsRefresh }
 }
@@ -406,8 +438,8 @@ function Refresh-AccountMenu {
     if ($selected.Count -gt 0) {
         $script:selectedAccount = $selected[0]
         $script:selectedCodexHome = [string]$script:selectedAccount.CodexHome
-        $accountItem.Text = [string]$script:selectedAccount.DisplayName
-        $accountItem.ToolTipText = if ($script:selectedAccount.Email) { [string]$script:selectedAccount.Email } else { [string]$script:selectedAccount.CodexHome }
+        $accountItem.Text = [string]$script:selectedAccount.MenuLabel
+        $accountItem.ToolTipText = [string]$script:selectedAccount.MenuLabel
     } else {
         $script:selectedAccount = $null
         $script:selectedCodexHome = $script:defaultCodexHome
@@ -415,8 +447,7 @@ function Refresh-AccountMenu {
         $accountItem.ToolTipText = 'Add a ChatGPT account'
     }
     foreach ($profile in $script:accountProfiles) {
-        $text = if ($profile.Email -and $profile.Email -ne $profile.DisplayName) { '{0} ({1})' -f $profile.DisplayName, $profile.Email } else { [string]$profile.DisplayName }
-        $item = [System.Windows.Forms.ToolStripMenuItem]::new($text)
+        $item = [System.Windows.Forms.ToolStripMenuItem]::new([string]$profile.MenuLabel)
         $item.Checked = ($profile.CodexHome -eq $script:selectedCodexHome)
         $item.Tag = [string]$profile.CodexHome
         $item.add_Click({ param($sender, $eventArgs) Select-CodexAccount -HomePath ([string]$sender.Tag) })
@@ -503,7 +534,7 @@ function Complete-AccountLogin {
     $profile = Get-CodexAccountProfile -HomePath $script:accountLoginHome
     if ($exitCode -eq 0 -and $profile) {
         Select-CodexAccount -HomePath $profile.CodexHome
-        [void][System.Windows.Forms.MessageBox]::Show("$($profile.DisplayName) was added and selected.", 'Account added', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        [void][System.Windows.Forms.MessageBox]::Show("$($profile.MenuLabel) was added and selected.", 'Account added', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
     } else {
         if (-not (Test-Path -LiteralPath (Join-Path $script:accountLoginHome 'auth.json') -PathType Leaf)) { Remove-Item -LiteralPath $script:accountLoginHome -Recurse -Force -ErrorAction SilentlyContinue }
         [void][System.Windows.Forms.MessageBox]::Show('ChatGPT sign-in did not complete. Choose Add account to try again.', 'Account not added', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
