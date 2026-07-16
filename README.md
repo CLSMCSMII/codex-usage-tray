@@ -2,6 +2,8 @@
 
 Current version: **1.4.3**
 
+See [Releases](https://github.com/CLSMCSMII/codex-usage-tray/releases) for downloads and [CHANGELOG.md](CHANGELOG.md) for the complete version history.
+
 A lightweight Windows system tray app that reads the latest usage percentage from local Codex session files in read-only mode and displays the remaining quota as a battery icon next to the clock.
 
 ChatGPT Business workspaces are supported. The displayed value is the limit reported by the Codex client for the signed-in user and workspace (often identified by `plan_type: team`). It is not the combined usage of every workspace member.
