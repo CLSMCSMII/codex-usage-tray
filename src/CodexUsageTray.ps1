@@ -2,7 +2,7 @@ param([switch]$NoUi, [switch]$Json, [switch]$Details, [switch]$LocalOnly, [switc
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$script:AppVersion = '1.4.2'
+$script:AppVersion = '1.4.3'
 $script:ApiTimeoutSec = 20
 $script:ChildProcessTimeoutSec = 45
 $script:UpdateCheckTimeoutSec = 180
@@ -26,6 +26,7 @@ Set fileSystem = CreateObject("Scripting.FileSystemObject")
 installRoot = fileSystem.GetParentFolderName(WScript.ScriptFullName)
 appPath = fileSystem.BuildPath(installRoot, "src\CodexUsageTray.ps1")
 command = "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File " & Chr(34) & appPath & Chr(34) & " -HiddenLaunch"
+shell.CurrentDirectory = shell.ExpandEnvironmentStrings("%TEMP%")
 shell.Run command, 0, False
 '@ | Set-Content -LiteralPath $script:launcherPath -Encoding ASCII
 }
@@ -33,7 +34,7 @@ shell.Run command, 0, False
 if (-not $NoUi -and -not $HiddenLaunch) {
     Initialize-HiddenLauncher
     $launcherArgument = '"' + $script:launcherPath + '"'
-    Start-Process (Join-Path $env:SystemRoot 'System32\wscript.exe') -WindowStyle Hidden -ArgumentList @('//B', '//NoLogo', $launcherArgument)
+    Start-Process (Join-Path $env:SystemRoot 'System32\wscript.exe') -WindowStyle Hidden -WorkingDirectory ([IO.Path]::GetTempPath()) -ArgumentList @('//B', '//NoLogo', $launcherArgument)
     return
 }
 
@@ -201,13 +202,36 @@ function ConvertTo-UsageSnapshot {
     }
 }
 
+function Get-FileTailLines {
+    param([Parameter(Mandatory)][string]$Path, [int]$Count = 500)
+    if ($Count -le 0) { return @() }
+    $lines = [Collections.Generic.Queue[string]]::new($Count)
+    $stream = $null
+    $reader = $null
+    try {
+        $share = [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
+        $stream = [IO.FileStream]::new($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, $share)
+        $reader = [IO.StreamReader]::new($stream, [Text.Encoding]::UTF8, $true, 4096, $true)
+        while (($line = $reader.ReadLine()) -ne $null) {
+            if ($lines.Count -eq $Count) { [void]$lines.Dequeue() }
+            $lines.Enqueue($line)
+        }
+        return @($lines.ToArray())
+    } catch {
+        return @()
+    } finally {
+        if ($reader) { $reader.Dispose() }
+        if ($stream) { $stream.Dispose() }
+    }
+}
+
 function Get-LatestCodexUsage {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
     $files = Get-ChildItem -LiteralPath $Path -Recurse -Filter '*.jsonl' -File -ErrorAction SilentlyContinue
     $latestSnapshot = $null
     foreach ($file in $files) {
-        $lines = @(Get-Content -LiteralPath $file.FullName -Tail 500 -ErrorAction SilentlyContinue)
+        $lines = @(Get-FileTailLines -Path $file.FullName -Count 500)
         for ($i = $lines.Count - 1; $i -ge 0; $i--) {
             if ($lines[$i] -notmatch '"rate_limits"') { continue }
             try {
@@ -810,7 +834,7 @@ function Set-StartupShortcut {
     $shortcut = $shell.CreateShortcut($startupShortcut)
     $shortcut.TargetPath = Join-Path $env:SystemRoot 'System32\wscript.exe'
     $shortcut.Arguments = '//B //NoLogo "' + $script:launcherPath + '"'
-    $shortcut.WorkingDirectory = $script:installRoot
+    $shortcut.WorkingDirectory = [IO.Path]::GetTempPath()
     $shortcut.Description = 'Codex usage indicator'
     $shortcut.Save()
 }

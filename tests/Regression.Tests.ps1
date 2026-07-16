@@ -94,6 +94,20 @@ try {
     }
     Write-Host 'PASS: local usage search is not truncated to twelve files.' -ForegroundColor Green
 
+    # The currently active session can be open for writing while the tray reads its fallback usage.
+    $activeSession = Join-Path $tempRoot 'active-session'
+    New-Item -ItemType Directory -Path $activeSession | Out-Null
+    $activePath = Join-Path $activeSession 'active.jsonl'
+    [IO.File]::WriteAllText($activePath, (New-RateLimitLine $now.ToString('o') 35))
+    $activeStream = [IO.FileStream]::new($activePath, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::ReadWrite)
+    try {
+        $activeResult = & $app -NoUi -LocalOnly -SessionsPath $activeSession
+        if (-not $activeResult -or [Math]::Abs($activeResult.Windows[0].UsedPercent - 35) -gt 0.001) {
+            throw 'Local usage could not read an active shared session file.'
+        }
+    } finally { $activeStream.Dispose() }
+    Write-Host 'PASS: local usage reads an active shared session file.' -ForegroundColor Green
+
     $appText = Get-Content -Raw -LiteralPath $app
     $updaterText = Get-Content -Raw -LiteralPath $updater
     $installerText = Get-Content -Raw -LiteralPath $installer
@@ -103,6 +117,8 @@ try {
     Assert-Matches $appText 'Local\\CLSMCSMII\.CodexUsageTray' 'The tray application has no per-session single-instance mutex.'
     Assert-Matches $appText 'TimeoutSec' 'Live usage requests have no explicit timeout.'
     Assert-Matches $appText 'refreshProcessStartedAt' 'Background refreshes have no overall watchdog.'
+    Assert-Matches $appText 'FileShare\]::ReadWrite' 'Local fallback does not use a shared-read stream for active session files.'
+    Assert-Matches $appText 'WorkingDirectory = \[IO\.Path\]::GetTempPath\(\)' 'The tray can launch child processes from the locked installation directory.'
     Assert-Matches $appText 'Programs\\OpenAI\\Codex\\bin\\codex\.exe' 'Additional-account sign-in does not prefer the standalone Codex CLI.'
     Assert-Matches $appText 'WindowsApps' 'Additional-account sign-in can still attempt to execute the protected Microsoft Store binary.'
     Assert-Matches $updaterText 'ExpectedArchiveSha256' 'The updater does not bind installation to the archive approved during the check.'

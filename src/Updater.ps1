@@ -71,10 +71,10 @@ function Start-TrayApp {
     $launcherPath = Join-Path $InstallRoot 'Launcher.vbs'
     if (Test-Path -LiteralPath $launcherPath -PathType Leaf) {
         $launcherArgument = '"' + $launcherPath + '"'
-        Start-Process (Join-Path $env:SystemRoot 'System32\wscript.exe') -WindowStyle Hidden -ArgumentList @('//B', '//NoLogo', $launcherArgument)
+        Start-Process (Join-Path $env:SystemRoot 'System32\wscript.exe') -WindowStyle Hidden -WorkingDirectory ([IO.Path]::GetTempPath()) -ArgumentList @('//B', '//NoLogo', $launcherArgument)
     } elseif (Test-Path -LiteralPath $appPath -PathType Leaf) {
         $arguments = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $appPath
-        Start-Process powershell.exe -WindowStyle Hidden -ArgumentList $arguments
+        Start-Process powershell.exe -WindowStyle Hidden -WorkingDirectory ([IO.Path]::GetTempPath()) -ArgumentList $arguments
     } else {
         throw 'The installed tray launcher and application are both missing.'
     }

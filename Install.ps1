@@ -15,6 +15,7 @@ $newInstallMoved = $false
 $installationSucceeded = $false
 $oldInstallWasRunning = $false
 $installTransactionStarted = $false
+$installStage = 'preparing installation'
 $shortcutExisted = Test-Path -LiteralPath $startup -PathType Leaf
 
 function Assert-SourcePackage {
@@ -76,7 +77,7 @@ function Stop-InstalledProcesses {
 function Start-InstalledTray {
     $launcher = Join-Path $target 'Launcher.vbs'
     $launcherArgument = '"' + $launcher + '"'
-    Start-Process (Join-Path $env:SystemRoot 'System32\wscript.exe') -WindowStyle Hidden -ArgumentList @('//B', '//NoLogo', $launcherArgument)
+    Start-Process (Join-Path $env:SystemRoot 'System32\wscript.exe') -WindowStyle Hidden -WorkingDirectory ([IO.Path]::GetTempPath()) -ArgumentList @('//B', '//NoLogo', $launcherArgument)
 }
 
 function Set-StartupShortcut {
@@ -85,7 +86,7 @@ function Set-StartupShortcut {
     $launcher = Join-Path $target 'Launcher.vbs'
     $shortcut.TargetPath = Join-Path $env:SystemRoot 'System32\wscript.exe'
     $shortcut.Arguments = '//B //NoLogo "' + $launcher + '"'
-    $shortcut.WorkingDirectory = $target
+    $shortcut.WorkingDirectory = [IO.Path]::GetTempPath()
     $shortcut.Description = 'Codex usage indicator'
     $shortcut.Save()
 }
@@ -101,20 +102,25 @@ try {
     if (-not $updateMutexHeld) { throw 'Another install, update, or uninstall operation is still running.' }
     $installTransactionStarted = $true
 
+    $installStage = 'stopping the installed tray process'
     $oldInstallWasRunning = [bool](Stop-InstalledProcesses)
+    $installStage = 'backing up the existing installation'
     if (Test-Path -LiteralPath $target) {
         Move-Item -LiteralPath $target -Destination $previousInstall
         $oldInstallMoved = $true
     }
+    $installStage = 'activating the staged installation'
     Move-Item -LiteralPath $staging -Destination $target
     $newInstallMoved = $true
+    $installStage = 'updating the Startup shortcut'
     Set-StartupShortcut
 
+    $installStage = 'starting the installed tray'
     Start-InstalledTray
     $installationSucceeded = $true
     Write-Host "Installed Codex Usage Tray to $target"
 } catch {
-    $failure = $_.Exception.Message
+    $failure = "$installStage`: $($_.Exception.Message)"
     if (-not $installTransactionStarted) { throw "Installation failed: $failure" }
     try {
         if ($newInstallMoved -and (Test-Path -LiteralPath $target)) {

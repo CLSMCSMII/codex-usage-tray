@@ -1,6 +1,6 @@
 # Codex Usage Tray for Windows
 
-Current version: **1.4.2**
+Current version: **1.4.3**
 
 A lightweight Windows system tray app that reads the latest usage percentage from local Codex session files in read-only mode and displays the remaining quota as a battery icon next to the clock.
 
@@ -21,6 +21,7 @@ ChatGPT Business workspaces are supported. The displayed value is the limit repo
 - Reads the Codex OAuth access token for live usage refreshes and left-click reset-credit requests; it is never displayed, logged, or stored by this app
 - Sends authenticated requests only to the ChatGPT usage and reset-credit endpoints; it does not upload prompt or response content
 - Rejects expired local snapshots instead of displaying stale quota data
+- Uses shared-read streaming for the local fallback so active or large session histories do not stall tray refreshes
 - Prevents duplicate tray instances for the same signed-in Windows session
 
 > **Important:** OpenAI does not currently document a public API for retrieving a regular user's remaining ChatGPT subscription or Codex quota percentage. This app therefore reads the `rate_limits` events written by the Codex client under `%USERPROFILE%\.codex\sessions`. This file format is an implementation detail and may change in a future Codex release.
