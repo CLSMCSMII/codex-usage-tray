@@ -1,15 +1,20 @@
-param([switch]$NoUi, [switch]$Json, [switch]$Details, [switch]$LocalOnly, [switch]$HiddenLaunch, [string]$SessionsPath)
+param([switch]$NoUi, [switch]$Json, [switch]$Details, [switch]$LocalOnly, [switch]$HiddenLaunch, [string]$SessionsPath, [string]$CodexHome)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$script:AppVersion = '1.3.0'
+$script:AppVersion = '1.4.0'
 $script:ApiTimeoutSec = 20
 $script:ChildProcessTimeoutSec = 45
 $script:UpdateCheckTimeoutSec = 180
 $script:MaxLocalSnapshotAgeHours = 24
+$script:AccountLoginTimeoutSec = 300
 
 $script:installRoot = Split-Path (Split-Path $PSCommandPath)
 $script:launcherPath = Join-Path $script:installRoot 'Launcher.vbs'
+$script:defaultCodexHome = if ($env:CODEX_HOME) { [IO.Path]::GetFullPath($env:CODEX_HOME) } else { [IO.Path]::GetFullPath((Join-Path $HOME '.codex')) }
+$script:accountsRoot = Join-Path $env:LOCALAPPDATA 'CodexUsageTrayAccounts'
+$script:settingsRoot = Join-Path $env:LOCALAPPDATA 'CodexUsageTrayData'
+$script:settingsPath = Join-Path $script:settingsRoot 'settings.json'
 
 function Initialize-HiddenLauncher {
     if (Test-Path -LiteralPath $script:launcherPath) { return }
@@ -45,8 +50,94 @@ if (-not $NoUi) {
 function Get-CodexSessionsPath {
     param([string]$Override)
     if ($Override) { return $Override }
-    if ($env:CODEX_HOME) { return (Join-Path $env:CODEX_HOME 'sessions') }
-    return (Join-Path $HOME '.codex\sessions')
+    $homePath = if ($CodexHome) { $CodexHome } else { $script:defaultCodexHome }
+    return (Join-Path $homePath 'sessions')
+}
+
+function ConvertFrom-JwtPayload {
+    param([string]$Token)
+    if (-not $Token) { return $null }
+    try {
+        $parts = $Token.Split('.')
+        if ($parts.Count -lt 2) { return $null }
+        $payload = [string]$parts[1]
+        $payload += '=' * ((4 - ($payload.Length % 4)) % 4)
+        $json = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payload.Replace('-', '+').Replace('_', '/')))
+        return ($json | ConvertFrom-Json)
+    } catch { return $null }
+}
+
+function Get-CodexAccountProfile {
+    param([Parameter(Mandatory)][string]$HomePath, [bool]$IsDefault = $false)
+    try { $fullHome = [IO.Path]::GetFullPath($HomePath) } catch { return $null }
+    $authPath = Join-Path $fullHome 'auth.json'
+    if (-not (Test-Path -LiteralPath $authPath -PathType Leaf)) { return $null }
+    try {
+        $auth = Get-Content -Raw -LiteralPath $authPath | ConvertFrom-Json
+        if (-not $auth.tokens.access_token) { return $null }
+        $claims = ConvertFrom-JwtPayload ([string]$auth.tokens.id_token)
+        $displayName = if ($claims -and $claims.name) { [string]$claims.name } elseif ($claims -and $claims.email) { [string]$claims.email } else { 'ChatGPT account' }
+        $displayName = ($displayName -replace '[\x00-\x1F]', ' ').Trim()
+        if ($displayName.Length -gt 60) { $displayName = $displayName.Substring(0, 60) }
+        $email = if ($claims -and $claims.email) { ([string]$claims.email -replace '[\x00-\x1F]', ' ').Trim() } else { '' }
+        $accountId = if ($auth.tokens.account_id) { [string]$auth.tokens.account_id } else { '' }
+        if (-not $accountId -and $claims) {
+            $authClaimProperty = $claims.PSObject.Properties['https://api.openai.com/auth']
+            if ($authClaimProperty -and $authClaimProperty.Value) {
+                $accountProperty = $authClaimProperty.Value.PSObject.Properties['chatgpt_account_id']
+                if ($accountProperty) { $accountId = [string]$accountProperty.Value }
+            }
+        }
+        [pscustomobject]@{
+            DisplayName = $displayName
+            Email = $email
+            AccountId = $accountId
+            CodexHome = $fullHome
+            IsDefault = $IsDefault
+        }
+    } catch { return $null }
+}
+
+function Get-CodexAccountProfiles {
+    param([string]$DefaultHome = $script:defaultCodexHome, [string]$ProfilesRoot = $script:accountsRoot)
+    $profiles = @()
+    $defaultProfile = Get-CodexAccountProfile -HomePath $DefaultHome -IsDefault $true
+    if ($defaultProfile) { $profiles += $defaultProfile }
+    if (Test-Path -LiteralPath $ProfilesRoot -PathType Container) {
+        foreach ($directory in @(Get-ChildItem -LiteralPath $ProfilesRoot -Directory -ErrorAction SilentlyContinue)) {
+            $profile = Get-CodexAccountProfile -HomePath $directory.FullName
+            if ($profile) { $profiles += $profile }
+        }
+    }
+    $seen = @{}
+    @($profiles | Where-Object {
+        $key = if ($_.AccountId) { 'account:' + $_.AccountId } else { 'path:' + $_.CodexHome.ToLowerInvariant() }
+        if ($seen.ContainsKey($key)) { return $false }
+        $seen[$key] = $true
+        return $true
+    } | Sort-Object @{ Expression = { -not $_.IsDefault } }, DisplayName, Email)
+}
+
+function Read-SelectedCodexHome {
+    param([string]$Path = $script:settingsPath)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+    try {
+        $settings = Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json
+        if (-not $settings.selectedCodexHome) { return $null }
+        return [IO.Path]::GetFullPath([string]$settings.selectedCodexHome)
+    } catch { return $null }
+}
+
+function Save-SelectedCodexHome {
+    param([Parameter(Mandatory)][string]$HomePath, [string]$Path = $script:settingsPath)
+    $parent = Split-Path $Path
+    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    $temporary = Join-Path $parent ('settings-' + [guid]::NewGuid() + '.tmp')
+    try {
+        [pscustomobject]@{ selectedCodexHome = [IO.Path]::GetFullPath($HomePath) } |
+            ConvertTo-Json -Compress | Set-Content -LiteralPath $temporary -Encoding UTF8
+        Move-Item -LiteralPath $temporary -Destination $Path -Force
+    } finally { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
 }
 
 function ConvertTo-UsageSnapshot {
@@ -106,7 +197,7 @@ function Get-LatestCodexUsage {
 }
 
 function Get-CodexAccessToken {
-    $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME '.codex' }
+    $codexHome = if ($CodexHome) { $CodexHome } else { $script:defaultCodexHome }
     $authPath = Join-Path $codexHome 'auth.json'
     if (-not (Test-Path -LiteralPath $authPath)) { throw 'Codex auth.json was not found. Sign in to ChatGPT/Codex and try again.' }
     $auth = Get-Content -Raw -LiteralPath $authPath | ConvertFrom-Json
@@ -240,7 +331,17 @@ function New-UsageIcon {
 $script:notify = [System.Windows.Forms.NotifyIcon]::new()
 $script:notify.Visible = $true
 $script:lastIcon = $null
+$script:accountProfiles = @(Get-CodexAccountProfiles)
+$requestedCodexHome = Read-SelectedCodexHome
+$script:selectedAccount = $null
+if ($requestedCodexHome) {
+    $script:selectedAccount = @($script:accountProfiles | Where-Object { $_.CodexHome -eq $requestedCodexHome } | Select-Object -First 1)
+    if ($script:selectedAccount.Count -gt 0) { $script:selectedAccount = $script:selectedAccount[0] } else { $script:selectedAccount = $null }
+}
+if (-not $script:selectedAccount -and $script:accountProfiles.Count -gt 0) { $script:selectedAccount = $script:accountProfiles[0] }
+$script:selectedCodexHome = if ($script:selectedAccount) { [string]$script:selectedAccount.CodexHome } else { $script:defaultCodexHome }
 $menu = [System.Windows.Forms.ContextMenuStrip]::new()
+$accountItem = $menu.Items.Add($(if ($script:selectedAccount) { [string]$script:selectedAccount.DisplayName } else { 'No signed-in account' }))
 $statusItem = $menu.Items.Add('Loading Codex usage...'); $statusItem.Enabled = $false
 $windowItem = $menu.Items.Add(''); $windowItem.Enabled = $false
 $resetItem = $menu.Items.Add(''); $resetItem.Enabled = $false
@@ -255,6 +356,147 @@ $exitItem = $menu.Items.Add('Exit')
 $script:notify.ContextMenuStrip = $menu
 $script:updateResultPath = Join-Path (Split-Path (Split-Path $PSCommandPath)) 'update-result.json'
 $script:updateResultShown = $false
+
+function Stop-AccountChildProcesses {
+    foreach ($name in @('refreshProcess', 'detailsProcess')) {
+        $process = Get-Variable -Name $name -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        if (-not $process) { continue }
+        try {
+            if (-not $process.HasExited) { $process.Kill(); [void]$process.WaitForExit(5000) }
+        } catch {} finally {
+            try { $process.Dispose() } catch {}
+            Set-Variable -Name $name -Scope Script -Value $null
+        }
+    }
+    $refreshItem.Enabled = $true
+}
+
+function Select-CodexAccount {
+    param([Parameter(Mandatory)][string]$HomePath)
+    $profile = @(Get-CodexAccountProfiles | Where-Object { $_.CodexHome -eq [IO.Path]::GetFullPath($HomePath) } | Select-Object -First 1)
+    if ($profile.Count -eq 0) {
+        [void][System.Windows.Forms.MessageBox]::Show('That account login is no longer available. Add the account again.', 'Account unavailable', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        Refresh-AccountMenu
+        return
+    }
+    $script:selectedAccount = $profile[0]
+    $script:selectedCodexHome = [string]$script:selectedAccount.CodexHome
+    Save-SelectedCodexHome -HomePath $script:selectedCodexHome
+    Stop-AccountChildProcesses
+    $script:lastSnapshot = $null
+    Refresh-AccountMenu -PreferredHome $script:selectedCodexHome
+    $statusItem.Text = 'Refreshing...'
+    $windowItem.Text = ''
+    $resetItem.Text = ''
+    $pendingIcon = New-UsageIcon $null
+    $script:notify.Icon = $pendingIcon
+    if ($script:lastIcon) { $script:lastIcon.Dispose() }
+    $script:lastIcon = $pendingIcon
+    $script:notify.Text = ('Codex: refreshing {0}' -f $script:selectedAccount.DisplayName).Substring(0, [Math]::Min(63, ('Codex: refreshing {0}' -f $script:selectedAccount.DisplayName).Length))
+    Start-UsageRefresh
+    if ($script:detailsForm -and -not $script:detailsForm.IsDisposed) { Start-DetailsRefresh }
+}
+
+function Refresh-AccountMenu {
+    param([string]$PreferredHome)
+    $accountItem.DropDownItems.Clear()
+    $script:accountProfiles = @(Get-CodexAccountProfiles)
+    $wantedHome = if ($PreferredHome) { [IO.Path]::GetFullPath($PreferredHome) } elseif ($script:selectedCodexHome) { [IO.Path]::GetFullPath($script:selectedCodexHome) } else { $script:defaultCodexHome }
+    $selected = @($script:accountProfiles | Where-Object { $_.CodexHome -eq $wantedHome } | Select-Object -First 1)
+    if ($selected.Count -gt 0) {
+        $script:selectedAccount = $selected[0]
+        $script:selectedCodexHome = [string]$script:selectedAccount.CodexHome
+        $accountItem.Text = [string]$script:selectedAccount.DisplayName
+        $accountItem.ToolTipText = if ($script:selectedAccount.Email) { [string]$script:selectedAccount.Email } else { [string]$script:selectedAccount.CodexHome }
+    } else {
+        $script:selectedAccount = $null
+        $script:selectedCodexHome = $script:defaultCodexHome
+        $accountItem.Text = 'No signed-in account'
+        $accountItem.ToolTipText = 'Add a ChatGPT account'
+    }
+    foreach ($profile in $script:accountProfiles) {
+        $text = if ($profile.Email -and $profile.Email -ne $profile.DisplayName) { '{0} ({1})' -f $profile.DisplayName, $profile.Email } else { [string]$profile.DisplayName }
+        $item = [System.Windows.Forms.ToolStripMenuItem]::new($text)
+        $item.Checked = ($profile.CodexHome -eq $script:selectedCodexHome)
+        $item.Tag = [string]$profile.CodexHome
+        $item.add_Click({ param($sender, $eventArgs) Select-CodexAccount -HomePath ([string]$sender.Tag) })
+        [void]$accountItem.DropDownItems.Add($item)
+    }
+    if ($script:accountProfiles.Count -gt 0) { [void]$accountItem.DropDownItems.Add([System.Windows.Forms.ToolStripSeparator]::new()) }
+    $addAccountItem = [System.Windows.Forms.ToolStripMenuItem]::new('Add account...')
+    $addAccountItem.add_Click({ Start-AddAccountLogin })
+    [void]$accountItem.DropDownItems.Add($addAccountItem)
+    $reloadAccountsItem = [System.Windows.Forms.ToolStripMenuItem]::new('Refresh account list')
+    $reloadAccountsItem.add_Click({ Refresh-AccountMenu })
+    [void]$accountItem.DropDownItems.Add($reloadAccountsItem)
+}
+
+function Get-CodexExecutable {
+    foreach ($name in @('codex.exe', 'codex')) {
+        $command = Get-Command $name -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($command -and $command.Source -and (Test-Path -LiteralPath $command.Source -PathType Leaf)) { return [string]$command.Source }
+    }
+    return $null
+}
+
+function Start-AddAccountLogin {
+    if ($script:accountLoginProcess -and -not $script:accountLoginProcess.HasExited) {
+        [void][System.Windows.Forms.MessageBox]::Show('An account sign-in is already in progress. Complete it in your browser first.', 'Sign-in in progress', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        return
+    }
+    $codexExecutable = Get-CodexExecutable
+    if (-not $codexExecutable) {
+        [void][System.Windows.Forms.MessageBox]::Show('The Codex command could not be found. Install or open ChatGPT/Codex, then try again.', 'Cannot add account', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        return
+    }
+    $choice = [System.Windows.Forms.MessageBox]::Show('Your browser will open for ChatGPT sign-in. Sign in with the account you want to add, then return to the tray app.', 'Add ChatGPT account', [System.Windows.Forms.MessageBoxButtons]::OKCancel, [System.Windows.Forms.MessageBoxIcon]::Information)
+    if ($choice -ne [System.Windows.Forms.DialogResult]::OK) { return }
+    New-Item -ItemType Directory -Path $script:accountsRoot -Force | Out-Null
+    $profileHome = Join-Path $script:accountsRoot ([guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $profileHome -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $profileHome 'config.toml') -Encoding UTF8 -Value 'cli_auth_credentials_store = "file"'
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $codexExecutable
+    $startInfo.Arguments = 'login'
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.EnvironmentVariables['CODEX_HOME'] = $profileHome
+    $script:accountLoginProcess = [System.Diagnostics.Process]::new()
+    $script:accountLoginProcess.StartInfo = $startInfo
+    try {
+        if (-not $script:accountLoginProcess.Start()) { throw 'Could not start ChatGPT sign-in.' }
+        $script:accountLoginHome = $profileHome
+        $script:accountLoginStartedAt = [DateTime]::Now
+        $script:notify.ShowBalloonTip(5000, 'ChatGPT sign-in', 'Complete the account sign-in in your browser.', [System.Windows.Forms.ToolTipIcon]::Info)
+    } catch {
+        $script:accountLoginProcess.Dispose(); $script:accountLoginProcess = $null
+        Remove-Item -LiteralPath $profileHome -Recurse -Force -ErrorAction SilentlyContinue
+        [void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Cannot add account', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+    }
+}
+
+function Complete-AccountLogin {
+    if (-not $script:accountLoginProcess) { return }
+    if (-not $script:accountLoginProcess.HasExited) {
+        if (([DateTime]::Now - $script:accountLoginStartedAt).TotalSeconds -le $script:AccountLoginTimeoutSec) { return }
+        try { $script:accountLoginProcess.Kill(); [void]$script:accountLoginProcess.WaitForExit(5000) } catch {}
+        $script:accountLoginProcess.Dispose(); $script:accountLoginProcess = $null
+        [void][System.Windows.Forms.MessageBox]::Show('Account sign-in timed out. Choose Add account to try again.', 'Sign-in timed out', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        return
+    }
+    $exitCode = $script:accountLoginProcess.ExitCode
+    $script:accountLoginProcess.Dispose(); $script:accountLoginProcess = $null
+    $profile = Get-CodexAccountProfile -HomePath $script:accountLoginHome
+    if ($exitCode -eq 0 -and $profile) {
+        Select-CodexAccount -HomePath $profile.CodexHome
+        [void][System.Windows.Forms.MessageBox]::Show("$($profile.DisplayName) was added and selected.", 'Account added', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+    } else {
+        if (-not (Test-Path -LiteralPath (Join-Path $script:accountLoginHome 'auth.json') -PathType Leaf)) { Remove-Item -LiteralPath $script:accountLoginHome -Recurse -Force -ErrorAction SilentlyContinue }
+        [void][System.Windows.Forms.MessageBox]::Show('ChatGPT sign-in did not complete. Choose Add account to try again.', 'Account not added', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+    }
+}
+
+Refresh-AccountMenu -PreferredHome $script:selectedCodexHome
 
 function Show-PendingUpdateResult {
     if ($script:updateResultShown -or -not (Test-Path -LiteralPath $script:updateResultPath)) { return }
@@ -576,6 +818,7 @@ function Start-DetailsRefresh {
     if ($script:detailsProcess -and -not $script:detailsProcess.HasExited) { return }
     $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -NoUi -Json -Details' -f $PSCommandPath
     if ($SessionsPath) { $arguments += ' -SessionsPath "{0}"' -f $SessionsPath }
+    if ($script:selectedCodexHome) { $arguments += ' -CodexHome "{0}"' -f $script:selectedCodexHome }
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new(); $startInfo.FileName = 'powershell.exe'; $startInfo.Arguments = $arguments
     $startInfo.UseShellExecute = $false; $startInfo.CreateNoWindow = $true; $startInfo.RedirectStandardOutput = $true; $startInfo.RedirectStandardError = $true
     $script:detailsProcess = [System.Diagnostics.Process]::new(); $script:detailsProcess.StartInfo = $startInfo
@@ -609,6 +852,7 @@ function Start-UsageRefresh {
     $refreshItem.Enabled = $false
     $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -NoUi -Json' -f $PSCommandPath
     if ($SessionsPath) { $arguments += ' -SessionsPath "{0}"' -f $SessionsPath }
+    if ($script:selectedCodexHome) { $arguments += ' -CodexHome "{0}"' -f $script:selectedCodexHome }
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = 'powershell.exe'
     $startInfo.Arguments = $arguments
@@ -659,9 +903,12 @@ function Complete-UsageRefresh {
 $script:refreshProcess = $null
 $script:detailsProcess = $null
 $script:updateCheckProcess = $null
+$script:accountLoginProcess = $null
+$script:accountLoginHome = $null
 $script:refreshProcessStartedAt = [DateTime]::MinValue
 $script:detailsProcessStartedAt = [DateTime]::MinValue
 $script:updateCheckProcessStartedAt = [DateTime]::MinValue
+$script:accountLoginStartedAt = [DateTime]::MinValue
 $script:updatePreviousStatus = ''
 $script:pendingUpdate = $null
 $script:detailsForm = $null
@@ -674,6 +921,7 @@ $timer = [System.Windows.Forms.Timer]::new(); $timer.Interval = 250; $timer.add_
     Complete-UsageRefresh
     Complete-DetailsRefresh
     Complete-UpdateCheck
+    Complete-AccountLogin
     if (-not $script:refreshProcess -and [DateTime]::Now -ge $script:nextRefresh) { Start-UsageRefresh }
 }); $timer.Start()
 $exitItem.add_Click({
@@ -681,6 +929,7 @@ $exitItem.add_Click({
     if ($script:refreshProcess -and -not $script:refreshProcess.HasExited) { $script:refreshProcess.Kill() }
     if ($script:detailsProcess -and -not $script:detailsProcess.HasExited) { $script:detailsProcess.Kill() }
     if ($script:updateCheckProcess -and -not $script:updateCheckProcess.HasExited) { $script:updateCheckProcess.Kill() }
+    if ($script:accountLoginProcess -and -not $script:accountLoginProcess.HasExited) { $script:accountLoginProcess.Kill() }
     Remove-PendingUpdateArchive $script:pendingUpdate
     Get-ChildItem -LiteralPath $script:installRoot -Filter 'pending-update-*.zip' -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
     if ($script:detailsForm -and -not $script:detailsForm.IsDisposed) { $script:detailsForm.Close() }

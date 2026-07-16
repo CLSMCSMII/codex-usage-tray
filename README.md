@@ -1,6 +1,6 @@
 # Codex Usage Tray for Windows
 
-Current version: **1.3.0**
+Current version: **1.4.0**
 
 A lightweight Windows system tray app that reads the latest usage percentage from local Codex session files in read-only mode and displays the remaining quota as a battery icon next to the clock.
 
@@ -9,6 +9,7 @@ ChatGPT Business workspaces are supported. The displayed value is the limit repo
 ## Features
 
 - Displays the remaining percentage as a large, high-contrast battery level with a number inside the tray icon
+- Shows the selected ChatGPT username at the top of the right-click menu and switches quota independently between saved account profiles
 - Opens a left-click details window with every available usage reset and reset-credit expiration date
 - Provides a right-click **Check for update** action that reports whether the app is current and shows both version numbers when an update is available
 - Starts through a windowless launcher so Windows Terminal or PowerShell does not remain open
@@ -29,6 +30,7 @@ ChatGPT Business workspaces are supported. The displayed value is the limit repo
 - Windows 10 or Windows 11
 - Windows PowerShell 5.1, included with Windows
 - Codex signed in and used at least once on the computer
+- The `codex` command available when adding another account through the tray menu
 
 ## Installation
 
@@ -69,6 +71,7 @@ Run the updater and regression tests:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Updater.Tests.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Regression.Tests.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Syntax.Tests.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Accounts.Tests.ps1
 ```
 
 ## Project structure
@@ -79,6 +82,7 @@ CodexUsageTray/
   src/Updater.ps1          In-place GitHub updater and rollback helper
   Launcher.vbs             Windowless app launcher
   tests/Parser.Tests.ps1   Parser smoke test with fixture data
+  tests/Accounts.Tests.ps1 Multi-account profile and settings tests
   tests/Updater.Tests.ps1  Isolated updater integration test
   tests/Regression.Tests.ps1 Runtime, deployment-safety, and documentation regressions
   tests/Syntax.Tests.ps1   PowerShell parser validation for every script
@@ -92,6 +96,12 @@ CodexUsageTray/
 The primary provider requests current usage from `https://chatgpt.com/backend-api/wham/usage` over HTTPS using the existing Codex access token. If live usage is unavailable, the fallback provider searches recent `*.jsonl` files under `%CODEX_HOME%\sessions` or `%USERPROFILE%\.codex\sessions` and parses only objects containing `payload.type = token_count` and `payload.rate_limits`. Prompt and response content is neither retained nor displayed.
 
 The app reads the existing Codex access token from `%CODEX_HOME%\auth.json` or `%USERPROFILE%\.codex\auth.json` and sends it only to the ChatGPT usage and reset-credit endpoints over HTTPS. The token and responses are kept in memory only. These ChatGPT backend endpoints are not documented public APIs and may change or stop working without notice.
+
+## Multiple ChatGPT accounts
+
+Right-click the tray icon and select the username at the top of the menu. Choose an existing account to display its quota, or choose **Add account...** and complete ChatGPT sign-in in the browser. The selected username remains above the **Refreshing...** or remaining-usage row.
+
+Codex exposes one active cached login per `CODEX_HOME`, so each additional account is signed into a separate profile under `%LOCALAPPDATA%\CodexUsageTrayAccounts`. The tray app stores only the selected profile path in `%LOCALAPPDATA%\CodexUsageTrayData\settings.json`; it does not copy tokens or identity data into that settings file. Each profile's `auth.json` is created and managed by the Codex login command and must be protected like a password. App updates and uninstalling the tray app do not delete these account profiles.
 
 ## Updating from GitHub
 

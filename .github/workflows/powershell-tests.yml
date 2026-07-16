@@ -19,6 +19,9 @@ jobs:
       - name: Parser tests
         shell: powershell
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Parser.Tests.ps1
+      - name: Account profile tests
+        shell: powershell
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Accounts.Tests.ps1
       - name: Regression tests
         shell: powershell
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Regression.Tests.ps1
